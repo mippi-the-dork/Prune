@@ -1,0 +1,86 @@
+// Copyright Mippithedork 2026, Inc. All Rights Reserved.
+
+#include "PruneModule.h"
+
+#include "PruneDetailsCustomization.h"
+#include "PruneState.h"
+
+#include "ActorDetailsDelegates.h"
+#include "CoreGlobals.h"
+#include "DetailLayoutBuilder.h"
+#include "GameFramework/Actor.h"
+#include "Logging/LogMacros.h"
+#include "Modules/ModuleManager.h"
+#include "PropertyEditorModule.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogPruneModule, Log, All);
+
+void FPruneModule::StartupModule()
+{
+    if (ActorDetailsExtensionHandle.IsValid() || IsRunningCommandlet())
+    {
+        return;
+    }
+
+    State = MakeShared<FPruneState>();
+
+    // ActorDetailsDelegates.h belongs to DetailCustomizations. Load that module
+    // first so Unreal's stock FActorDetails and its extension delegate exist.
+    FModuleManager::LoadModuleChecked<IModuleInterface>(
+        TEXT("DetailCustomizations"));
+
+    const TSharedRef<FPruneState> StateRef = State.ToSharedRef();
+
+    ActorDetailsExtensionHandle = OnExtendActorDetails.AddLambda(
+        [StateRef](
+            IDetailLayoutBuilder& DetailBuilder,
+            const FGetSelectedActors& GetSelectedActors)
+        {
+            if (!GetSelectedActors.IsBound())
+            {
+                return;
+            }
+
+            FPruneDetailsCustomization::ExtendActorDetails(
+                StateRef,
+                DetailBuilder,
+                GetSelectedActors.Execute());
+        });
+
+    // The delegate affects future Actor layout builds. Force currently-open
+    // Details views through the normal customization refresh once as well.
+    FPropertyEditorModule& PropertyEditor =
+        FModuleManager::LoadModuleChecked<FPropertyEditorModule>(
+            TEXT("PropertyEditor"));
+
+    PropertyEditor.NotifyCustomizationModuleChanged();
+
+    UE_LOG(
+        LogPruneModule,
+        Log,
+        TEXT("Prune registered through OnExtendActorDetails."));
+}
+
+void FPruneModule::ShutdownModule()
+{
+    if (ActorDetailsExtensionHandle.IsValid()
+        && FModuleManager::Get().IsModuleLoaded(TEXT("DetailCustomizations")))
+    {
+        OnExtendActorDetails.Remove(ActorDetailsExtensionHandle);
+        ActorDetailsExtensionHandle.Reset();
+    }
+
+    if (!IsEngineExitRequested())
+    {
+        if (FPropertyEditorModule* PropertyEditor =
+            FModuleManager::GetModulePtr<FPropertyEditorModule>(
+                TEXT("PropertyEditor")))
+        {
+            PropertyEditor->NotifyCustomizationModuleChanged();
+        }
+    }
+
+    State.Reset();
+}
+
+IMPLEMENT_MODULE(FPruneModule, Prune)

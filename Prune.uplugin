@@ -1,0 +1,23 @@
+{
+    "FileVersion": 3,
+    "Version": 7,
+    "VersionName": "0.1.6",
+    "FriendlyName": "Prune",
+    "Description": "Adds category-level filtering to Level Editor Actor Details using Unreal's Actor Details extension and dynamic category visibility.",
+    "Category": "Editor",
+    "CreatedBy": "Mippi the Dork",
+    "CanContainContent": false,
+    "IsBetaVersion": true,
+    "Installed": false,
+    "EngineVersion": "5.8.0",
+    "SupportedTargetPlatforms": [
+        "Win64"
+    ],
+    "Modules": [
+        {
+            "Name": "Prune",
+            "Type": "Editor",
+            "LoadingPhase": "PostEngineInit"
+        }
+    ]
+}
