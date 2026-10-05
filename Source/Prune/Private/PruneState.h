@@ -2,47 +2,72 @@
 
 #pragma once
 
+#include "Containers/Array.h"
+#include "Containers/Map.h"
+#include "Containers/Set.h"
+#include "Containers/Ticker.h"
 #include "CoreMinimal.h"
+#include "Templates/SharedPointer.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 
 class IDetailCategoryBuilder;
 class IDetailsView;
+class SWidget;
+class UClass;
 
 struct FPruneCategoryInfo
 {
     FName Id = NAME_None;
     FText DisplayName;
+    int32 NativeSortOrder = 0;
 };
 
-/**
- * One user-facing category row in the preset editor.
- *
- * Unreal can expose multiple internal IDs with one display label. Prune edits
- * those IDs as one row while preserving the real IDs in the saved preset.
- */
+/** One user-facing category row in the filter editor. */
 struct FPruneCategoryGroupInfo
 {
     FText DisplayName;
     TArray<FName> Ids;
+    int32 NativeSortOrder = 0;
 };
 
-struct FPrunePresetSummary
+enum class EPruneFilterKind : uint8
 {
-    FString Id;
-    FText Name;
+    None,
+    Custom,
+    Native
 };
 
-/**
- * One live Actor Details layout.
- *
- * The layout context owns only descriptive category data and a weak reference
- * to the Details view. It never owns the engine category builders.
- */
+/** The single editable section currently selected in a Details view. */
+struct FPruneEditableFilter
+{
+    EPruneFilterKind Kind = EPruneFilterKind::None;
+    FName SectionName = NAME_None;
+    FText DisplayName;
+    int32 SectionOrder = 0;
+    FString CustomPresetId;
+    FString NativeOverrideId;
+    bool bHasNativeOverride = false;
+};
+
+/** Initial data consumed by the New/Edit Filter modal. */
+struct FPruneFilterEditorData
+{
+    FString Name;
+    bool bGlobal = false;
+    FName ScopeClassName = NAME_None;
+    TSet<FName> HiddenCategories;
+    TArray<FName> OrderedCategoryIds;
+    bool bNativeFilter = false;
+    bool bHasNativeOverride = false;
+};
+
 class FPruneLayoutContext : public TSharedFromThis<FPruneLayoutContext>
 {
 public:
     FPruneLayoutContext(
         FText InSelectionLabel,
-        TSharedPtr<const IDetailsView> InDetailsView);
+        TSharedPtr<const IDetailsView> InDetailsView,
+        UClass* InActorClass);
 
     void UpdateFromFinalCategories(
         const TMap<FName, IDetailCategoryBuilder*>& InCategories);
@@ -55,54 +80,84 @@ public:
     {
         return DetailsView.Pin();
     }
+    UClass* GetActorClass() const { return ActorClass.Get(); }
+    FName GetActorClassName() const;
+
+    void SetSectionSelectorWidget(const TSharedPtr<SWidget>& InWidget);
+    TArray<FString> GetCheckedSectionLabels() const;
 
     void LogCurrentCategories() const;
 
 private:
     FText SelectionLabel;
     TWeakPtr<const IDetailsView> DetailsView;
+    TWeakObjectPtr<UClass> ActorClass;
+    TWeakPtr<SWidget> SectionSelectorWidget;
     TArray<FPruneCategoryInfo> RawCategories;
     TArray<FPruneCategoryGroupInfo> CategoryGroups;
 };
 
-/**
- * Persistent Prune preset state.
- *
- * Presets remain class-agnostic deny-lists of internal category IDs. They are
- * exposed to the Details panel as native Property Sections. Whenever Prune
- * discovers a new category, it adds that category to every preset section
- * unless the preset explicitly hides that ID. This preserves the original
- * "unknown categories default visible" rule while using Unreal's native
- * section-filter buttons as the actual preset UI.
- */
 class FPruneState : public TSharedFromThis<FPruneState>
 {
 public:
     FPruneState();
     ~FPruneState();
 
-    TArray<FPrunePresetSummary> GetPresets() const;
-    TSet<FName> GetPresetHiddenCategories(const FString& PresetId) const;
-
     bool CreatePreset(
+        const TSharedRef<FPruneLayoutContext>& Context,
         const FString& PresetName,
+        bool bGlobal,
         const TSet<FName>& HiddenCategories,
+        const TArray<FName>& OrderedCategoryIds,
         FString& OutError);
 
     bool UpdatePreset(
+        const TSharedRef<FPruneLayoutContext>& Context,
         const FString& PresetId,
         const FString& PresetName,
+        bool bGlobal,
         const TSet<FName>& HiddenCategories,
+        const TArray<FName>& OrderedCategoryIds,
         FString& OutError);
 
     bool DeletePreset(const FString& PresetId);
 
+    bool ResolveSingleActiveFilter(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        FPruneEditableFilter& OutFilter) const;
+
+    bool BuildEditorData(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FPruneEditableFilter& Filter,
+        FPruneFilterEditorData& OutData);
+
+    bool SaveNativeOverride(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FPruneEditableFilter& Filter,
+        bool bGlobal,
+        const TSet<FName>& HiddenCategories,
+        const TArray<FName>& OrderedCategoryIds,
+        FString& OutError);
+
+    bool ResetNativeOverride(const FPruneEditableFilter& Filter);
+
+    bool CanEditActiveFilter(
+        const TSharedRef<FPruneLayoutContext>& Context) const;
+
+    TArray<FName> GetActiveCategoryOrder(
+        const TSharedRef<FPruneLayoutContext>& Context) const;
+
     void RegisterLayoutContext(const TSharedRef<FPruneLayoutContext>& Context);
     TArray<TSharedRef<FPruneLayoutContext>> GetLiveLayoutContexts();
+    TSharedPtr<FPruneLayoutContext> FindLatestLayoutContextForDetailsView(
+        const TSharedPtr<const IDetailsView>& DetailsView);
+
     void SyncNativeSectionsForContext(
         const TSharedRef<FPruneLayoutContext>& Context);
 
+    /** Remove Prune-created sections and restore runtime native section edits. */
     void RemoveAllNativeSections();
+
     void LogCurrentCategories(
         const TSharedRef<FPruneLayoutContext>& Context) const;
 
@@ -111,20 +166,113 @@ private:
     {
         FString Id;
         FString Name;
+        bool bGlobal = true;
+        FName ClassName = NAME_None;
         TSet<FName> HiddenCategories;
+        TArray<FName> OrderedCategoryIds;
+    };
+
+    struct FNativeOverrideData
+    {
+        FString Id;
+        FName SectionName = NAME_None;
+        FString DisplayName;
+        int32 SectionOrder = 0;
+        bool bGlobal = false;
+        FName ClassName = NAME_None;
+        TSet<FName> AddedCategories;
+        TSet<FName> RemovedCategories;
+        TArray<FName> OrderedCategoryIds;
+
+        // Runtime-only snapshots used to restore the effective native behavior.
+        TMap<FString, bool> BaselineMembership;
+        TSet<FName> TouchedClasses;
+    };
+
+    struct FObservedViewOrderState
+    {
+        TWeakPtr<const IDetailsView> DetailsView;
+        FString Signature;
+        bool bHadCustomOrder = false;
+    };
+
+    struct FSectionDefinition
+    {
+        FName Name = NAME_None;
+        FText DisplayName;
+        int32 Order = 0;
     };
 
     static FName MakeSectionName(const FString& PresetId);
+    static FString MakeBaselineKey(FName ClassName, FName CategoryId);
 
     void CompactContexts();
-    void RebuildAllNativeSections();
-    void RebuildNativeSection(const FPresetData& Preset, int32 Order);
+    void CompactObservedViews();
+
+    bool DoesScopeApplyToClass(
+        bool bGlobal,
+        FName ScopeClassName,
+        const UClass* ActorClass) const;
+
+    bool IsCustomSectionName(FName SectionName, FString* OutPresetId = nullptr) const;
+    const FPresetData* FindPresetBySectionName(FName SectionName) const;
+    FPresetData* FindPresetBySectionName(FName SectionName);
+
+    TArray<FSectionDefinition> CollectNativeSections(
+        const TSharedRef<FPruneLayoutContext>& Context) const;
+
+    const FNativeOverrideData* FindApplicableNativeOverride(
+        FName SectionName,
+        const UClass* ActorClass) const;
+    FNativeOverrideData* FindApplicableNativeOverride(
+        FName SectionName,
+        const UClass* ActorClass);
+
+    bool IsSectionIncludedForCategory(
+        const UClass* ActorClass,
+        FName SectionName,
+        FName CategoryId) const;
+
+    bool ValidateCustomPresetName(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FString& CleanName,
+        const FString& IgnorePresetId,
+        FString& OutError) const;
+
+    void RebuildAllCustomSections();
+    void RebuildCustomSection(const FPresetData& Preset, int32 Order);
+    void RemoveCustomSection(const FPresetData& Preset);
+
+    void ApplyNativeOverridesForContext(
+        const TSharedRef<FPruneLayoutContext>& Context);
+    void ApplyNativeOverrideForContext(
+        FNativeOverrideData& Override,
+        const TSharedRef<FPruneLayoutContext>& Context);
+    void CaptureNativeBaseline(
+        FNativeOverrideData& Override,
+        const TSharedRef<FPruneLayoutContext>& Context);
+    void RestoreNativeOverrideRuntime(FNativeOverrideData& Override);
+    void ClearDependentNativeBaselines(FName SectionName, const FString& IgnoreOverrideId);
+
+    static TArray<FName> MergeCategoryOrder(
+        const TArray<FName>& ExistingOrder,
+        const TArray<FName>& CurrentOrder,
+        const TArray<FName>& CurrentCategoryIds);
+
+    bool TickActiveCategoryOrders(float DeltaTime);
+    FString BuildActiveOrderSignature(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        bool& bOutHasCustomOrder) const;
+
     void RefreshDetailsViews();
     void ResetLiveViewsToAll();
     void LoadPersistentState();
     void SavePersistentState() const;
 
     TMap<FString, FPresetData> PresetsById;
+    TMap<FString, FNativeOverrideData> NativeOverridesById;
     TSet<FName> KnownCategoryIds;
     TArray<TWeakPtr<FPruneLayoutContext>> LayoutContexts;
+    TArray<FObservedViewOrderState> ObservedViewOrders;
+    FTSTicker::FDelegateHandle ActiveOrderTickerHandle;
 };

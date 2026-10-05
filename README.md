@@ -1,88 +1,137 @@
-# Prune 0.4.3
+# Prune 0.5.1
 
-Prune is an Unreal Engine editor plugin that adds editable category presets to the standard Level Editor Actor Details panel.
+Prune is an Unreal Engine editor plugin for creating and editing category filters in the standard Level Editor Actor Details panel.
 
-0.4.3 moves Prune onto Unreal's native **Property Section** system. Prune presets now appear in the same filter row as Unreal's built-in **General**, **Actor**, **LOD**, **Physics**, **Rendering**, and other section buttons.
+Prune works directly with Unreal's native Property Section row, alongside filters such as **General**, **Actor**, **LOD**, **Physics**, **Rendering**, and **All**.
 
-## Native Preset Row
+## 0.5.1 Compile Fix
 
-Prune no longer adds a collapsible **Prune** category to the Details tree.
+- Corrected the UE 5.8 Slate include path for `SOverlay` to `Widgets/SOverlay.h`.
+- No behavior changes from 0.5.0.
 
-Instead:
+## Filter Row UX
 
-- saved Prune presets appear as normal native section buttons,
-- Unreal's existing **All** button remains the reset/show-everything state,
-- clicking a Prune preset uses Unreal's own section filtering path,
-- Ctrl-click continues to use Unreal's native multi-section behavior,
-- Unreal itself remembers selected sections per Details class/view using its normal Details configuration.
+Prune 0.5.1 replaces the previous Prune management menu with two compact controls:
 
-Prune-created section names are internally unique and are registered on `AActor`, so they are inherited by Actor subclasses.
+- **+** creates a new filter.
+- **Filter + Gear** edits the single active editable filter.
 
-## Prune Management Control
+The gear is disabled when **All** is active, when Ctrl multi-section selection is active, or when the selected section is not an editable category filter.
 
-A compact **Prune** menu is injected at the right side of the native section row.
+The row is conceptually:
 
-The menu provides:
+`[ General | Actor | LOD | ... | Custom Filter | All ] [ + ] [ Filter + Gear ]`
 
-- **New Preset...**
-- **Edit** for each existing Prune preset
-- **Delete** for each existing Prune preset
-- **Log Current Category IDs** for diagnostics
+The **+** button uses Unreal's native Details section-button style.
 
-The preset editor lists the finished categories available for the current Actor layout. Checked categories are included by the preset. Unchecked categories are hidden by that preset.
+## New Filters
 
-If Unreal exposes multiple internal category IDs with the same display label, such as `Transform` and `TransformCommon`, Prune presents them as one checkbox while keeping both internal IDs in the saved preset.
+The New Filter window provides:
 
-## Class-Agnostic Deny-List Semantics
+- filter name,
+- **Global** scope toggle,
+- category visibility checkboxes,
+- category ordering controls,
+- **Reset Order**,
+- Save and Cancel.
 
-Prune still stores presets as class-agnostic deny-lists of internal category IDs.
+When **Global** is enabled, the filter is available to all Actor classes.
 
-When a category is discovered for the first time, Prune automatically adds it to every native Prune section unless that preset explicitly hides the category ID.
+When **Global** is disabled, the filter belongs to the currently selected Actor class and is inherited by derived Actor classes through Unreal's normal Property Section inheritance.
 
-This preserves the existing Prune rule:
+Existing Prune 0.4.x filters are migrated as Global filters so their previous behavior is preserved.
 
-> Unknown or newly introduced categories default to visible.
+## Editing Epic Filters
 
-A preset therefore remains useful across unrelated Actor classes without needing every class's category set ahead of time.
+Unreal's existing Property Section filters can now be edited through the same gear button.
 
-## Plugin Categories
+Examples include:
 
-Prune performs finished-category discovery after native and plugin customizations have contributed their categories.
+- General
+- Actor
+- LOD
+- Misc
+- Physics
+- Rendering
+- Streaming
 
-This includes ordinary plugin-added Details categories such as:
+Prune stores an override rather than replacing the engine source definition. Native filter names are read-only in the editor.
 
-- `Surface - Favorites`
-- `Surface - Component Details`
+An edited Epic filter can be scoped to the current Actor class or made Global. **Reset to Epic Default** removes the applicable Prune override and restores the captured native behavior.
 
-Those categories can be included or excluded by a Prune preset just like native Unreal categories.
+**All** is never editable.
+
+Helper sections such as Favorites and Modified are not treated as editable category presets.
+
+## Category Ordering
+
+Each editable filter can store its own Details category order.
+
+The filter editor provides up and down controls for every visible category group. When that filter is active, Prune applies the stored order during Details layout generation.
+
+Rules:
+
+- categories explicitly arranged by the user follow the saved order,
+- categories not yet known to the saved filter remain visible and fall after the stored entries using Unreal's normal relative order,
+- duplicate visible labels such as `Transform` and `TransformCommon` move together as one editor row,
+- Ctrl multi-section selection falls back to Unreal's native category order,
+- switching into or out of a filter with a custom order requests one Details refresh so the correct order is applied.
+
+## Filter Scope
+
+Prune supports two scopes:
+
+### Class
+
+The filter or Epic-filter override is associated with the currently selected Actor class. Derived classes inherit it through Unreal's Property Section rules.
+
+### Global
+
+The filter is available across Actor classes.
+
+For custom Prune filters, Global sections are registered on `AActor`.
+
+For Epic-filter overrides, Prune applies the same saved override lazily to each encountered Actor class. This avoids replacing Unreal's global section registry and keeps the engine-owned section definition available underneath the override.
+
+## Native Filter Row Integration
+
+UE 5.8's `SActorDetails` creates its Details view with `bCustomFilterAreaLocation = true` and places `IDetailsView::GetFilterAreaWidget()` into the Level Editor layout.
+
+Prune uses that public accessor. It does not crawl the whole Details widget tree.
+
+Inside the filter area, Unreal owns the native `SectionView` `SWrapBox`. Prune keeps that exact widget intact and places the **+** and **Filter + Gear** controls beside it as siblings.
+
+Unreal may rebuild the contents of `SectionView` normally without deleting Prune's controls.
 
 ## Native Category Order Preservation
 
-Prune still uses `SortCategories()` as the public finished-category discovery point.
+Prune uses `IDetailLayoutBuilder::SortCategories()` as its finished-category discovery point.
 
-UE 5.8 changes category grouping whenever a sort callback exists, so Prune reconstructs Unreal's normal simple/advanced-only grouping before reading the completed category map. Enabling Prune should therefore not reshuffle the standard Details category order.
+UE 5.8 changes the normal simple and advanced-only grouping when any sort callback is installed. Prune reconstructs Unreal's native grouping before discovery, then applies a filter-specific stored order only when required.
 
-## Section-Row Integration
-
-UE 5.8 does not expose a public extension slot for the right side of the section-selector row.
-
-Prune uses a narrow UE 5.8-specific Slate bridge:
-
-- the standard Details view tags its native section `SWrapBox` as `SectionView`,
-- `IDetailsView` is itself a Slate widget,
-- Prune finds that tagged row after Unreal rebuilds it,
-- Prune appends one management widget to the row,
-- no engine source files are modified or replaced.
-
-The native preset buttons themselves use only public `FPropertyEditorModule` / `FPropertySection` APIs.
+With **All** or an unmodified filter active, Unreal's normal category order is preserved.
 
 ## Persistence
 
-Named Prune preset definitions persist per user/project through `EditorPerProjectUserSettings.ini`.
+Prune persists per-user, per-project filter data through `EditorPerProjectUserSettings.ini`.
 
-Existing 0.3.0 named presets use the same saved preset format and are loaded by 0.4.3.
+Saved data includes:
 
-The old 0.3.0 per-class **Custom** hidden-category state is no longer the active interaction model. Native Details sections now own the active filter selection.
+- custom filter definitions,
+- Global or Class scope,
+- hidden category IDs,
+- category order,
+- Epic filter override deltas,
+- Epic filter override scope and order.
+
+## Plugin Categories
+
+Prune discovers the finished category map after Actor Details customizations have run, so plugin-added categories can participate too.
+
+This includes categories such as:
+
+- `Surface - Favorites`
+- `Surface - Component Details`
 
 ## Target
 
@@ -95,49 +144,6 @@ The old 0.3.0 per-class **Custom** hidden-category state is no longer the active
 ## Current Limitations
 
 - Level Editor instance Actor Details only.
-- Preset editing lists categories available on the currently viewed Actor layout. Hidden IDs from other Actor classes are preserved when editing an existing preset.
-- A preset that excludes every category available on a particular Actor may not produce a native section button for that Actor because Unreal only displays sections that map to at least one populated category.
-- Deleting a preset that is selected in a Details view resets currently live views during refresh, but an unopened class can still have Unreal's own saved section selection pointing at the deleted section until the user selects **All**. This is an Unreal section-selection persistence edge case to harden in a later pass.
-- The right-side management control depends on UE 5.8's `SectionView` Slate tag and section-row structure. It should be regression-tested on every supported engine update.
-- No Component Details preset family yet.
-- No Class Defaults integration yet.
-
-## 0.4.2 Test Focus
-
-Primary validation targets:
-
-- Prune's old Details category is gone,
-- the **Prune** management control appears on the right side of the native section row,
-- creating a preset adds a native preset button before **All**,
-- clicking a Prune preset filters through Unreal's native section system,
-- **All** restores the complete Details view,
-- editing and renaming a preset updates the same native section button,
-- deleting a preset removes its button,
-- preset definitions survive an editor restart,
-- new category IDs default visible unless explicitly hidden by the preset,
-- duplicate visible category names remain grouped in the editor,
-- Surface categories remain available to presets,
-- native category order remains unchanged,
-- multiple Details panels each receive one Prune management control.
-
-### 0.4.2 prototype fix
-
-- Fixed a layout-context lifetime regression introduced when the old Prune Details category was removed.
-- Finished-category discovery, native-order restoration, native preset-section syncing, and the section-row Prune management control now remain alive for the full lifetime of each Details layout.
-
-
-## 0.4.2 UI Injection Hardening
-
-- Keeps the Prune management control present even when Unreal rebuilds the native section row.
-- Retries the management-control insertion from a lightweight live-view ticker.
-- Uses the UE 5.8 `SectionView` metadata tag first, with a structural SWrapBox fallback.
-- Preserves the native category-order restoration from 0.4.1.
-
-
-## 0.4.3 Section Row Wrapper Fix
-
-- Keeps the validated 0.4.1 native category-order restoration.
-- Stops inserting the Prune manager directly into Unreal's `SWrapBox` section selector.
-- Wraps the existing native `SectionView` in a horizontal row instead, leaving Unreal's section buttons on the left and reserving a stable auto-width management area on the right.
-- Unreal may continue calling `RebuildSectionSelector()` and clearing/repopulating its own section buttons without deleting the Prune manager.
-- The periodic UI guard remains as a recovery path for newly reconstructed Details views.
+- Component Details and Class Defaults are not integrated yet.
+- An Epic filter override can only modify categories Prune has encountered while that override is active. Newly encountered categories retain their underlying Unreal behavior until explicitly changed.
+- A custom filter that contains no populated category for the current Actor may not appear because Unreal only displays Property Sections that map to populated categories.

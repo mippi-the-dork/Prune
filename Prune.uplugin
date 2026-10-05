@@ -1,9 +1,9 @@
 {
     "FileVersion": 3,
-    "Version": 10,
-    "VersionName": "0.4.3",
+    "Version": 13,
+    "VersionName": "0.5.1",
     "FriendlyName": "Prune",
-    "Description": "Adds editable native Details section presets to Level Editor Actor Details while preserving native category ordering.",
+    "Description": "Adds editable Actor Details filters with native section buttons, class or global scope, Epic filter overrides, and per-filter category ordering.",
     "Category": "Editor",
     "CreatedBy": "Mippi the Dork",
     "CanContainContent": false,

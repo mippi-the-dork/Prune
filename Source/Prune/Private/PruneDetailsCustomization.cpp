@@ -7,19 +7,18 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "IDetailsView.h"
-#include "IPropertyUtilities.h"
 #include "Misc/MessageDialog.h"
 #include "PruneState.h"
 #include "Styling/AppStyle.h"
 #include "Types/ISlateMetaData.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
-#include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -32,16 +31,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogPruneDetails, Log, All);
 namespace PruneDetailsCustomizationPrivate
 {
     static const FName SectionViewTag(TEXT("SectionView"));
-    static const FName PruneManagerTag(TEXT("Prune.Manager"));
     static const FName PruneSectionRowWrapperTag(TEXT("Prune.SectionRowWrapper"));
 
-    /**
-     * UE 5.8 normally sorts simple categories and advanced-only categories
-     * separately, then appends the advanced-only block. Registering any
-     * SortCategories callback changes that to a single combined sort. Prune
-     * needs the callback for finished-category discovery, so restore the native
-     * grouping before reading the completed category map.
-     */
+    /** Restore UE's normal simple/advanced-only grouping before Prune reads it. */
     static void RestoreStandardCategoryGrouping(
         const TMap<FName, IDetailCategoryBuilder*>& Categories)
     {
@@ -54,7 +46,6 @@ namespace PruneDetailsCustomizationPrivate
 
         TArray<FCategoryOrderEntry> SimpleCategories;
         TArray<FCategoryOrderEntry> AdvancedOnlyCategories;
-
         SimpleCategories.Reserve(Categories.Num());
         AdvancedOnlyCategories.Reserve(Categories.Num());
 
@@ -68,7 +59,6 @@ namespace PruneDetailsCustomizationPrivate
 
             TArray<TSharedRef<IPropertyHandle>> SimpleProperties;
             TArray<TSharedRef<IPropertyHandle>> AdvancedProperties;
-
             Category->GetDefaultProperties(SimpleProperties, true, false);
             Category->GetDefaultProperties(AdvancedProperties, false, true);
 
@@ -80,14 +70,7 @@ namespace PruneDetailsCustomizationPrivate
             const bool bAdvancedOnly =
                 SimpleProperties.IsEmpty() && !AdvancedProperties.IsEmpty();
 
-            if (bAdvancedOnly)
-            {
-                AdvancedOnlyCategories.Add(OrderEntry);
-            }
-            else
-            {
-                SimpleCategories.Add(OrderEntry);
-            }
+            (bAdvancedOnly ? AdvancedOnlyCategories : SimpleCategories).Add(OrderEntry);
         }
 
         const auto SortByOriginalOrder =
@@ -97,7 +80,6 @@ namespace PruneDetailsCustomizationPrivate
                 {
                     return A.OriginalSortOrder < B.OriginalSortOrder;
                 }
-
                 return A.Id.ToString() < B.Id.ToString();
             };
 
@@ -115,26 +97,112 @@ namespace PruneDetailsCustomizationPrivate
         }
     }
 
-    static FText BuildSelectionLabel(
-        const TArray<TWeakObjectPtr<AActor>>& SelectedActors)
+    static void ApplyStoredCategoryOrder(
+        const TArray<FName>& StoredOrder,
+        const TMap<FName, IDetailCategoryBuilder*>& Categories)
     {
-        TSet<const UClass*> Classes;
-        const UClass* FirstClass = nullptr;
-
-        for (const TWeakObjectPtr<AActor>& WeakActor : SelectedActors)
+        if (StoredOrder.IsEmpty())
         {
-            const AActor* Actor = WeakActor.Get();
-            const UClass* ActorClass = Actor ? Actor->GetClass() : nullptr;
-            if (ActorClass != nullptr)
+            return;
+        }
+
+        TSet<FName> Applied;
+        int32 NewOrder = 0;
+
+        for (const FName CategoryId : StoredOrder)
+        {
+            if (IDetailCategoryBuilder* const* Category = Categories.Find(CategoryId))
             {
-                Classes.Add(ActorClass);
-                FirstClass = FirstClass ? FirstClass : ActorClass;
+                if (*Category != nullptr && !Applied.Contains(CategoryId))
+                {
+                    (*Category)->SetSortOrder(NewOrder++);
+                    Applied.Add(CategoryId);
+                }
             }
         }
 
-        if (Classes.Num() == 1 && FirstClass != nullptr)
+        struct FRemainingCategory
         {
-            return FirstClass->GetDisplayNameText();
+            FName Id = NAME_None;
+            IDetailCategoryBuilder* Category = nullptr;
+            int32 NativeOrder = 0;
+        };
+
+        TArray<FRemainingCategory> Remaining;
+        for (const TPair<FName, IDetailCategoryBuilder*>& Entry : Categories)
+        {
+            if (Entry.Value == nullptr || Applied.Contains(Entry.Key))
+            {
+                continue;
+            }
+
+            FRemainingCategory& Item = Remaining.AddDefaulted_GetRef();
+            Item.Id = Entry.Key;
+            Item.Category = Entry.Value;
+            Item.NativeOrder = Entry.Value->GetSortOrder();
+        }
+
+        Remaining.Sort(
+            [](const FRemainingCategory& A, const FRemainingCategory& B)
+            {
+                if (A.NativeOrder != B.NativeOrder)
+                {
+                    return A.NativeOrder < B.NativeOrder;
+                }
+                return A.Id.ToString() < B.Id.ToString();
+            });
+
+        for (FRemainingCategory& Item : Remaining)
+        {
+            Item.Category->SetSortOrder(NewOrder++);
+        }
+    }
+
+    static UClass* GetSingleActorClass(
+        const TArray<TWeakObjectPtr<AActor>>& SelectedActors)
+    {
+        UClass* Result = nullptr;
+
+        for (const TWeakObjectPtr<AActor>& WeakActor : SelectedActors)
+        {
+            AActor* Actor = WeakActor.Get();
+            UClass* ActorClass = Actor ? Actor->GetClass() : nullptr;
+            if (ActorClass == nullptr)
+            {
+                continue;
+            }
+
+            if (Result == nullptr)
+            {
+                Result = ActorClass;
+            }
+            else if (Result != ActorClass)
+            {
+                return nullptr;
+            }
+        }
+
+        return Result;
+    }
+
+    static FText BuildSelectionLabel(
+        const TArray<TWeakObjectPtr<AActor>>& SelectedActors)
+    {
+        if (UClass* SingleClass = GetSingleActorClass(SelectedActors))
+        {
+            return SingleClass->GetDisplayNameText();
+        }
+
+        TSet<const UClass*> Classes;
+        for (const TWeakObjectPtr<AActor>& WeakActor : SelectedActors)
+        {
+            if (const AActor* Actor = WeakActor.Get())
+            {
+                if (const UClass* ActorClass = Actor->GetClass())
+                {
+                    Classes.Add(ActorClass);
+                }
+            }
         }
 
         return FText::Format(
@@ -142,88 +210,305 @@ namespace PruneDetailsCustomizationPrivate
             FText::AsNumber(Classes.Num()));
     }
 
-    struct FPresetEditorResult
+    enum class EFilterEditorAction : uint8
     {
-        FString Name;
-        TSet<FName> HiddenCategories;
+        Cancel,
+        Save,
+        Delete,
+        ResetNative
     };
 
-    static TOptional<FPresetEditorResult> ShowPresetEditor(
+    struct FFilterEditorResult
+    {
+        EFilterEditorAction Action = EFilterEditorAction::Cancel;
+        FString Name;
+        bool bGlobal = false;
+        TSet<FName> HiddenCategories;
+        TArray<FName> OrderedCategoryIds;
+    };
+
+    static TArray<FName> FlattenGroupOrder(
+        const TArray<FPruneCategoryGroupInfo>& Groups)
+    {
+        TArray<FName> Result;
+        for (const FPruneCategoryGroupInfo& Group : Groups)
+        {
+            for (const FName Id : Group.Ids)
+            {
+                Result.AddUnique(Id);
+            }
+        }
+        return Result;
+    }
+
+    static void ApplySavedOrderToGroups(
+        TArray<FPruneCategoryGroupInfo>& Groups,
+        const TArray<FName>& OrderedCategoryIds)
+    {
+        if (OrderedCategoryIds.IsEmpty() || Groups.IsEmpty())
+        {
+            return;
+        }
+
+        TMap<FName, int32> RankById;
+        for (int32 Index = 0; Index < OrderedCategoryIds.Num(); ++Index)
+        {
+            RankById.FindOrAdd(OrderedCategoryIds[Index]) = Index;
+        }
+
+        Groups.Sort(
+            [&RankById](const FPruneCategoryGroupInfo& A, const FPruneCategoryGroupInfo& B)
+            {
+                int32 ARank = MAX_int32;
+                int32 BRank = MAX_int32;
+
+                for (const FName Id : A.Ids)
+                {
+                    if (const int32* Rank = RankById.Find(Id))
+                    {
+                        ARank = FMath::Min(ARank, *Rank);
+                    }
+                }
+                for (const FName Id : B.Ids)
+                {
+                    if (const int32* Rank = RankById.Find(Id))
+                    {
+                        BRank = FMath::Min(BRank, *Rank);
+                    }
+                }
+
+                if (ARank != BRank)
+                {
+                    return ARank < BRank;
+                }
+                if (A.NativeSortOrder != B.NativeSortOrder)
+                {
+                    return A.NativeSortOrder < B.NativeSortOrder;
+                }
+                return A.DisplayName.ToString() < B.DisplayName.ToString();
+            });
+    }
+
+    static TOptional<FFilterEditorResult> ShowFilterEditor(
         const TSharedRef<FPruneLayoutContext>& LayoutContext,
-        const FString& InitialName,
-        const TSet<FName>& InitialHiddenCategories,
-        bool bEditingExisting)
+        const FPruneFilterEditorData& InitialData,
+        bool bCreatingNew,
+        bool bEditingNative)
     {
         TSharedPtr<SEditableTextBox> NameTextBox;
-        TSet<FName> WorkingHiddenCategories = InitialHiddenCategories;
-        bool bAccepted = false;
+        TSharedPtr<SVerticalBox> CategoryList;
+        TArray<FPruneCategoryGroupInfo> WorkingGroups = LayoutContext->GetCategoryGroups();
+        TSet<FName> WorkingHiddenCategories = InitialData.HiddenCategories;
+        bool bWorkingGlobal = InitialData.bGlobal;
+        bool bWorkingCustomOrder = !InitialData.OrderedCategoryIds.IsEmpty();
+        EFilterEditorAction Action = EFilterEditorAction::Cancel;
 
-        const TArray<FPruneCategoryGroupInfo> CategoryGroups =
-            LayoutContext->GetCategoryGroups();
+        ApplySavedOrderToGroups(WorkingGroups, InitialData.OrderedCategoryIds);
+        const TArray<FPruneCategoryGroupInfo> NativeGroups = LayoutContext->GetCategoryGroups();
 
-        TSharedRef<SVerticalBox> CategoryList = SNew(SVerticalBox);
-
-        for (const FPruneCategoryGroupInfo& Group : CategoryGroups)
+        TFunction<void()> RebuildCategoryList;
+        RebuildCategoryList = [&]()
         {
-            const TArray<FName> CategoryIds = Group.Ids;
+            if (!CategoryList.IsValid())
+            {
+                return;
+            }
 
-            CategoryList->AddSlot()
-            .AutoHeight()
-            .Padding(2.0f)
-            [
-                SNew(SCheckBox)
-                .IsChecked_Lambda(
-                    [&WorkingHiddenCategories, CategoryIds]()
-                    {
-                        int32 HiddenCount = 0;
-                        for (const FName CategoryId : CategoryIds)
-                        {
-                            HiddenCount += WorkingHiddenCategories.Contains(CategoryId)
-                                ? 1
-                                : 0;
-                        }
+            CategoryList->ClearChildren();
 
-                        if (HiddenCount == 0)
-                        {
-                            return ECheckBoxState::Checked;
-                        }
-                        if (HiddenCount == CategoryIds.Num())
-                        {
-                            return ECheckBoxState::Unchecked;
-                        }
-                        return ECheckBoxState::Undetermined;
-                    })
-                .OnCheckStateChanged_Lambda(
-                    [&WorkingHiddenCategories, CategoryIds](ECheckBoxState State)
-                    {
-                        const bool bShow = State == ECheckBoxState::Checked;
-                        for (const FName CategoryId : CategoryIds)
-                        {
-                            if (bShow)
-                            {
-                                WorkingHiddenCategories.Remove(CategoryId);
-                            }
-                            else
-                            {
-                                WorkingHiddenCategories.Add(CategoryId);
-                            }
-                        }
-                    })
+            for (int32 Index = 0; Index < WorkingGroups.Num(); ++Index)
+            {
+                const FPruneCategoryGroupInfo Group = WorkingGroups[Index];
+                const TArray<FName> CategoryIds = Group.Ids;
+
+                CategoryList->AddSlot()
+                .AutoHeight()
+                .Padding(2.0f)
                 [
-                    SNew(STextBlock)
-                    .Text(Group.DisplayName)
-                ]
-            ];
+                    SNew(SHorizontalBox)
+
+                    + SHorizontalBox::Slot()
+                    .FillWidth(1.0f)
+                    .VAlign(VAlign_Center)
+                    [
+                        SNew(SCheckBox)
+                        .IsChecked_Lambda(
+                            [&WorkingHiddenCategories, CategoryIds]()
+                            {
+                                int32 HiddenCount = 0;
+                                for (const FName CategoryId : CategoryIds)
+                                {
+                                    HiddenCount += WorkingHiddenCategories.Contains(CategoryId) ? 1 : 0;
+                                }
+
+                                if (HiddenCount == 0)
+                                {
+                                    return ECheckBoxState::Checked;
+                                }
+                                if (HiddenCount == CategoryIds.Num())
+                                {
+                                    return ECheckBoxState::Unchecked;
+                                }
+                                return ECheckBoxState::Undetermined;
+                            })
+                        .OnCheckStateChanged_Lambda(
+                            [&WorkingHiddenCategories, CategoryIds](ECheckBoxState State)
+                            {
+                                const bool bShow = State == ECheckBoxState::Checked;
+                                for (const FName CategoryId : CategoryIds)
+                                {
+                                    if (bShow)
+                                    {
+                                        WorkingHiddenCategories.Remove(CategoryId);
+                                    }
+                                    else
+                                    {
+                                        WorkingHiddenCategories.Add(CategoryId);
+                                    }
+                                }
+                            })
+                        [
+                            SNew(STextBlock)
+                            .Text(Group.DisplayName)
+                        ]
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .VAlign(VAlign_Center)
+                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(SButton)
+                        .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                        .ContentPadding(FMargin(5.0f, 1.0f))
+                        .IsEnabled(Index > 0)
+                        .ToolTipText(LOCTEXT("MoveCategoryUp", "Move category up"))
+                        .Text(FText::FromString(TEXT("↑")))
+                        .OnClicked_Lambda([&WorkingGroups, &bWorkingCustomOrder, &RebuildCategoryList, Index]()
+                        {
+                            if (Index > 0 && WorkingGroups.IsValidIndex(Index))
+                            {
+                                WorkingGroups.Swap(Index, Index - 1);
+                                bWorkingCustomOrder = true;
+                                RebuildCategoryList();
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .VAlign(VAlign_Center)
+                    .Padding(2.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(SButton)
+                        .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                        .ContentPadding(FMargin(5.0f, 1.0f))
+                        .IsEnabled(Index + 1 < WorkingGroups.Num())
+                        .ToolTipText(LOCTEXT("MoveCategoryDown", "Move category down"))
+                        .Text(FText::FromString(TEXT("↓")))
+                        .OnClicked_Lambda([&WorkingGroups, &bWorkingCustomOrder, &RebuildCategoryList, Index]()
+                        {
+                            if (WorkingGroups.IsValidIndex(Index)
+                                && WorkingGroups.IsValidIndex(Index + 1))
+                            {
+                                WorkingGroups.Swap(Index, Index + 1);
+                                bWorkingCustomOrder = true;
+                                RebuildCategoryList();
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+                ];
+            }
+        };
+
+        const bool bCanUseClassScope = LayoutContext->GetActorClass() != nullptr;
+        if (!bCanUseClassScope)
+        {
+            bWorkingGlobal = true;
         }
 
         TSharedRef<SWindow> Dialog =
             SNew(SWindow)
-            .Title(bEditingExisting
-                ? LOCTEXT("EditPresetTitle", "Edit Prune Preset")
-                : LOCTEXT("NewPresetTitle", "New Prune Preset"))
+            .Title(bCreatingNew
+                ? LOCTEXT("NewFilterTitle", "New Filter")
+                : LOCTEXT("EditFilterTitle", "Edit Filter"))
             .SizingRule(ESizingRule::Autosized)
             .SupportsMaximize(false)
             .SupportsMinimize(false);
+
+        TSharedRef<SHorizontalBox> BottomButtons = SNew(SHorizontalBox);
+
+        if (!bCreatingNew && !bEditingNative)
+        {
+            BottomButtons->AddSlot()
+            .AutoWidth()
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("DeleteFilter", "Delete Filter"))
+                .OnClicked_Lambda([Dialog, &Action]()
+                {
+                    Action = EFilterEditorAction::Delete;
+                    Dialog->RequestDestroyWindow();
+                    return FReply::Handled();
+                })
+            ];
+        }
+        else if (!bCreatingNew && bEditingNative)
+        {
+            BottomButtons->AddSlot()
+            .AutoWidth()
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("ResetEpicDefault", "Reset to Epic Default"))
+                .IsEnabled(InitialData.bHasNativeOverride)
+                .OnClicked_Lambda([Dialog, &Action]()
+                {
+                    Action = EFilterEditorAction::ResetNative;
+                    Dialog->RequestDestroyWindow();
+                    return FReply::Handled();
+                })
+            ];
+        }
+
+        BottomButtons->AddSlot()
+        .FillWidth(1.0f)
+        [
+            SNew(SBox)
+        ];
+
+        BottomButtons->AddSlot()
+        .AutoWidth()
+        [
+            SNew(SButton)
+            .Text(LOCTEXT("CancelFilterEdit", "Cancel"))
+            .OnClicked_Lambda([Dialog]()
+            {
+                Dialog->RequestDestroyWindow();
+                return FReply::Handled();
+            })
+        ];
+
+        BottomButtons->AddSlot()
+        .AutoWidth()
+        .Padding(6.0f, 0.0f, 0.0f, 0.0f)
+        [
+            SNew(SButton)
+            .Text(LOCTEXT("SaveFilterEdit", "Save"))
+            .IsEnabled_Lambda([&NameTextBox, bEditingNative]()
+            {
+                return bEditingNative
+                    || (NameTextBox.IsValid()
+                        && !NameTextBox->GetText().ToString().TrimStartAndEnd().IsEmpty());
+            })
+            .OnClicked_Lambda([Dialog, &Action]()
+            {
+                Action = EFilterEditorAction::Save;
+                Dialog->RequestDestroyWindow();
+                return FReply::Handled();
+            })
+        ];
 
         Dialog->SetContent(
             SNew(SBorder)
@@ -237,8 +522,8 @@ namespace PruneDetailsCustomizationPrivate
                     SNew(STextBlock)
                     .Text(FText::Format(
                         LOCTEXT(
-                            "PresetEditorDescription",
-                            "Checked categories are included in the preset for {0}. New category IDs discovered later default to visible."),
+                            "FilterEditorDescription",
+                            "Choose which categories are visible and their order when this filter is active for {0}."),
                         LayoutContext->GetSelectionLabel()))
                     .AutoWrapText(true)
                 ]
@@ -248,37 +533,108 @@ namespace PruneDetailsCustomizationPrivate
                 .Padding(0.0f, 10.0f, 0.0f, 4.0f)
                 [
                     SNew(STextBlock)
-                    .Text(LOCTEXT("PresetNameLabel", "Preset Name"))
+                    .Text(LOCTEXT("FilterNameLabel", "Filter Name"))
                 ]
 
                 + SVerticalBox::Slot()
                 .AutoHeight()
                 [
                     SAssignNew(NameTextBox, SEditableTextBox)
-                    .Text(FText::FromString(InitialName))
-                    .MinDesiredWidth(360.0f)
-                    .SelectAllTextWhenFocused(true)
+                    .Text(FText::FromString(InitialData.Name))
+                    .MinDesiredWidth(430.0f)
+                    .IsReadOnly(bEditingNative)
+                    .SelectAllTextWhenFocused(!bEditingNative)
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(0.0f, 10.0f, 0.0f, 0.0f)
+                [
+                    SNew(SCheckBox)
+                    .IsEnabled(bCanUseClassScope)
+                    .IsChecked_Lambda([&bWorkingGlobal]()
+                    {
+                        return bWorkingGlobal
+                            ? ECheckBoxState::Checked
+                            : ECheckBoxState::Unchecked;
+                    })
+                    .OnCheckStateChanged_Lambda([&bWorkingGlobal](ECheckBoxState State)
+                    {
+                        bWorkingGlobal = State == ECheckBoxState::Checked;
+                    })
+                    [
+                        SNew(STextBlock)
+                        .Text(LOCTEXT("GlobalFilterLabel", "Global - show this filter on any Actor"))
+                    ]
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(22.0f, 2.0f, 0.0f, 0.0f)
+                [
+                    SNew(STextBlock)
+                    .Text_Lambda([LayoutContext, InitialData, &bWorkingGlobal]()
+                    {
+                        if (bWorkingGlobal)
+                        {
+                            return LOCTEXT("GlobalScopeDescription", "Scope: all Actor classes");
+                        }
+
+                        if (!InitialData.ScopeClassName.IsNone()
+                            && InitialData.ScopeClassName != LayoutContext->GetActorClassName())
+                        {
+                            return FText::Format(
+                                LOCTEXT("InheritedClassScopeDescription", "Scope: {0} and derived classes"),
+                                FText::FromName(InitialData.ScopeClassName));
+                        }
+
+                        return FText::Format(
+                            LOCTEXT("ClassScopeDescription", "Scope: {0} and derived classes"),
+                            LayoutContext->GetSelectionLabel());
+                    })
+                    .TextStyle(FAppStyle::Get(), "SmallText")
                 ]
 
                 + SVerticalBox::Slot()
                 .AutoHeight()
                 .Padding(0.0f, 10.0f, 0.0f, 4.0f)
                 [
-                    SNew(STextBlock)
-                    .Text(LOCTEXT("PresetCategoriesLabel", "Categories"))
+                    SNew(SHorizontalBox)
+                    + SHorizontalBox::Slot()
+                    .FillWidth(1.0f)
+                    .VAlign(VAlign_Center)
+                    [
+                        SNew(STextBlock)
+                        .Text(LOCTEXT("FilterCategoriesLabel", "Categories"))
+                    ]
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    [
+                        SNew(SButton)
+                        .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                        .Text(LOCTEXT("ResetCategoryOrder", "Reset Order"))
+                        .ToolTipText(LOCTEXT("ResetCategoryOrderTooltip", "Restore Unreal's native category order for the current Actor layout."))
+                        .OnClicked_Lambda([&WorkingGroups, &bWorkingCustomOrder, NativeGroups, &RebuildCategoryList]()
+                        {
+                            WorkingGroups = NativeGroups;
+                            bWorkingCustomOrder = false;
+                            RebuildCategoryList();
+                            return FReply::Handled();
+                        })
+                    ]
                 ]
 
                 + SVerticalBox::Slot()
                 .AutoHeight()
                 [
                     SNew(SBox)
-                    .MinDesiredWidth(360.0f)
-                    .MaxDesiredHeight(500.0f)
+                    .MinDesiredWidth(430.0f)
+                    .MaxDesiredHeight(520.0f)
                     [
                         SNew(SScrollBox)
                         + SScrollBox::Slot()
                         [
-                            CategoryList
+                            SAssignNew(CategoryList, SVerticalBox)
                         ]
                     ]
                 ]
@@ -286,372 +642,198 @@ namespace PruneDetailsCustomizationPrivate
                 + SVerticalBox::Slot()
                 .AutoHeight()
                 .Padding(0.0f, 10.0f, 0.0f, 0.0f)
-                .HAlign(HAlign_Right)
                 [
-                    SNew(SHorizontalBox)
-
-                    + SHorizontalBox::Slot()
-                    .AutoWidth()
-                    [
-                        SNew(SButton)
-                        .Text(LOCTEXT("CancelPresetEdit", "Cancel"))
-                        .OnClicked_Lambda([Dialog]()
-                        {
-                            Dialog->RequestDestroyWindow();
-                            return FReply::Handled();
-                        })
-                    ]
-
-                    + SHorizontalBox::Slot()
-                    .AutoWidth()
-                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
-                    [
-                        SNew(SButton)
-                        .Text(LOCTEXT("SavePresetEdit", "Save"))
-                        .IsEnabled_Lambda([&NameTextBox]()
-                        {
-                            return NameTextBox.IsValid()
-                                && !NameTextBox->GetText().ToString()
-                                    .TrimStartAndEnd().IsEmpty();
-                        })
-                        .OnClicked_Lambda([Dialog, &bAccepted]()
-                        {
-                            bAccepted = true;
-                            Dialog->RequestDestroyWindow();
-                            return FReply::Handled();
-                        })
-                    ]
+                    BottomButtons
                 ]
             ]);
+
+        RebuildCategoryList();
 
         FSlateApplication::Get().AddModalWindow(
             Dialog,
             FSlateApplication::Get().GetActiveTopLevelWindow(),
             false);
 
-        if (!bAccepted || !NameTextBox.IsValid())
+        if (Action == EFilterEditorAction::Cancel)
         {
-            return TOptional<FPresetEditorResult>();
+            return TOptional<FFilterEditorResult>();
         }
 
-        FPresetEditorResult Result;
-        Result.Name = NameTextBox->GetText().ToString().TrimStartAndEnd();
+        FFilterEditorResult Result;
+        Result.Action = Action;
+        Result.Name = NameTextBox.IsValid()
+            ? NameTextBox->GetText().ToString().TrimStartAndEnd()
+            : InitialData.Name;
+        Result.bGlobal = bWorkingGlobal;
         Result.HiddenCategories = MoveTemp(WorkingHiddenCategories);
+        Result.OrderedCategoryIds = bWorkingCustomOrder
+            ? FlattenGroupOrder(WorkingGroups)
+            : TArray<FName>();
         return Result;
     }
 
-    static TSharedRef<SWidget> BuildManagementMenu(
-        const TWeakPtr<FPruneState>& WeakState,
-        const TWeakPtr<FPruneLayoutContext>& WeakLayoutContext)
+    static void HandleEditorResult(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FPruneEditableFilter* ExistingFilter,
+        const FFilterEditorResult& Result)
     {
-        const TSharedPtr<FPruneState> State = WeakState.Pin();
-        const TSharedPtr<FPruneLayoutContext> Context = WeakLayoutContext.Pin();
-
-        TSharedRef<SVerticalBox> List = SNew(SVerticalBox);
-
-        List->AddSlot()
-        .AutoHeight()
-        .Padding(6.0f, 4.0f)
-        [
-            SNew(SButton)
-            .Text(LOCTEXT("NewPreset", "+ New Preset..."))
-            .IsEnabled(Context.IsValid())
-            .OnClicked_Lambda([WeakState, WeakLayoutContext]()
-            {
-                FSlateApplication::Get().DismissAllMenus();
-
-                const TSharedPtr<FPruneState> LiveState = WeakState.Pin();
-                const TSharedPtr<FPruneLayoutContext> LiveContext =
-                    WeakLayoutContext.Pin();
-                if (!LiveState.IsValid() || !LiveContext.IsValid())
-                {
-                    return FReply::Handled();
-                }
-
-                const TOptional<FPresetEditorResult> Result =
-                    ShowPresetEditor(
-                        LiveContext.ToSharedRef(),
-                        FString(),
-                        TSet<FName>(),
-                        false);
-
-                if (Result.IsSet())
-                {
-                    FString Error;
-                    if (!LiveState->CreatePreset(
-                        Result->Name,
-                        Result->HiddenCategories,
-                        Error))
-                    {
-                        FMessageDialog::Open(
-                            EAppMsgType::Ok,
-                            FText::FromString(Error));
-                    }
-                }
-
-                return FReply::Handled();
-            })
-        ];
-
-        const TArray<FPrunePresetSummary> Presets = State.IsValid()
-            ? State->GetPresets()
-            : TArray<FPrunePresetSummary>();
-
-        if (!Presets.IsEmpty())
+        if (Result.Action == EFilterEditorAction::Delete
+            && ExistingFilter != nullptr
+            && ExistingFilter->Kind == EPruneFilterKind::Custom)
         {
-            List->AddSlot()
-            .AutoHeight()
-            .Padding(4.0f, 3.0f)
-            [
-                SNew(SSeparator)
-            ];
+            const FText Name = ExistingFilter->DisplayName;
+            if (FMessageDialog::Open(
+                EAppMsgType::YesNo,
+                FText::Format(
+                    LOCTEXT("DeleteFilterConfirm", "Delete Prune filter '{0}'?"),
+                    Name)) == EAppReturnType::Yes)
+            {
+                State->DeletePreset(ExistingFilter->CustomPresetId);
+            }
+            return;
         }
 
-        for (const FPrunePresetSummary& Preset : Presets)
+        if (Result.Action == EFilterEditorAction::ResetNative
+            && ExistingFilter != nullptr
+            && ExistingFilter->Kind == EPruneFilterKind::Native)
         {
-            const FString PresetId = Preset.Id;
-            const FText PresetName = Preset.Name;
-
-            List->AddSlot()
-            .AutoHeight()
-            .Padding(6.0f, 2.0f)
-            [
-                SNew(SHorizontalBox)
-
-                + SHorizontalBox::Slot()
-                .FillWidth(1.0f)
-                .VAlign(VAlign_Center)
-                [
-                    SNew(STextBlock)
-                    .Text(PresetName)
-                ]
-
-                + SHorizontalBox::Slot()
-                .AutoWidth()
-                .Padding(8.0f, 0.0f, 0.0f, 0.0f)
-                [
-                    SNew(SButton)
-                    .Text(LOCTEXT("EditPreset", "Edit"))
-                    .IsEnabled(Context.IsValid())
-                    .OnClicked_Lambda(
-                        [WeakState, WeakLayoutContext, PresetId, PresetName]()
-                        {
-                            FSlateApplication::Get().DismissAllMenus();
-
-                            const TSharedPtr<FPruneState> LiveState =
-                                WeakState.Pin();
-                            const TSharedPtr<FPruneLayoutContext> LiveContext =
-                                WeakLayoutContext.Pin();
-                            if (!LiveState.IsValid() || !LiveContext.IsValid())
-                            {
-                                return FReply::Handled();
-                            }
-
-                            const TOptional<FPresetEditorResult> Result =
-                                ShowPresetEditor(
-                                    LiveContext.ToSharedRef(),
-                                    PresetName.ToString(),
-                                    LiveState->GetPresetHiddenCategories(PresetId),
-                                    true);
-
-                            if (Result.IsSet())
-                            {
-                                FString Error;
-                                if (!LiveState->UpdatePreset(
-                                    PresetId,
-                                    Result->Name,
-                                    Result->HiddenCategories,
-                                    Error))
-                                {
-                                    FMessageDialog::Open(
-                                        EAppMsgType::Ok,
-                                        FText::FromString(Error));
-                                }
-                            }
-
-                            return FReply::Handled();
-                        })
-                ]
-
-                + SHorizontalBox::Slot()
-                .AutoWidth()
-                .Padding(4.0f, 0.0f, 0.0f, 0.0f)
-                [
-                    SNew(SButton)
-                    .Text(LOCTEXT("DeletePreset", "Delete"))
-                    .OnClicked_Lambda([WeakState, PresetId, PresetName]()
-                    {
-                        FSlateApplication::Get().DismissAllMenus();
-
-                        if (FMessageDialog::Open(
-                            EAppMsgType::YesNo,
-                            FText::Format(
-                                LOCTEXT(
-                                    "DeletePresetConfirm",
-                                    "Delete Prune preset '{0}'?"),
-                                PresetName)) == EAppReturnType::Yes)
-                        {
-                            if (const TSharedPtr<FPruneState> LiveState =
-                                WeakState.Pin())
-                            {
-                                LiveState->DeletePreset(PresetId);
-                            }
-                        }
-
-                        return FReply::Handled();
-                    })
-                ]
-            ];
+            State->ResetNativeOverride(*ExistingFilter);
+            return;
         }
 
-        List->AddSlot()
-        .AutoHeight()
-        .Padding(4.0f, 3.0f)
-        [
-            SNew(SSeparator)
-        ];
+        if (Result.Action != EFilterEditorAction::Save)
+        {
+            return;
+        }
 
-        List->AddSlot()
-        .AutoHeight()
-        .Padding(6.0f, 2.0f)
-        [
-            SNew(SButton)
-            .Text(LOCTEXT("LogCategoryIds", "Log Current Category IDs"))
-            .IsEnabled(Context.IsValid())
-            .OnClicked_Lambda([WeakState, WeakLayoutContext]()
-            {
-                if (const TSharedPtr<FPruneState> LiveState = WeakState.Pin())
-                {
-                    if (const TSharedPtr<FPruneLayoutContext> LiveContext =
-                        WeakLayoutContext.Pin())
-                    {
-                        LiveState->LogCurrentCategories(LiveContext.ToSharedRef());
-                    }
-                }
-                return FReply::Handled();
-            })
-        ];
+        FString Error;
+        bool bSuccess = false;
 
-        return SNew(SBox)
-            .MinDesiredWidth(360.0f)
-            .MaxDesiredHeight(620.0f)
-            [
-                SNew(SScrollBox)
-                + SScrollBox::Slot()
-                [
-                    List
-                ]
-            ];
+        if (ExistingFilter == nullptr)
+        {
+            bSuccess = State->CreatePreset(
+                Context,
+                Result.Name,
+                Result.bGlobal,
+                Result.HiddenCategories,
+                Result.OrderedCategoryIds,
+                Error);
+        }
+        else if (ExistingFilter->Kind == EPruneFilterKind::Custom)
+        {
+            bSuccess = State->UpdatePreset(
+                Context,
+                ExistingFilter->CustomPresetId,
+                Result.Name,
+                Result.bGlobal,
+                Result.HiddenCategories,
+                Result.OrderedCategoryIds,
+                Error);
+        }
+        else if (ExistingFilter->Kind == EPruneFilterKind::Native)
+        {
+            bSuccess = State->SaveNativeOverride(
+                Context,
+                *ExistingFilter,
+                Result.bGlobal,
+                Result.HiddenCategories,
+                Result.OrderedCategoryIds,
+                Error);
+        }
+
+        if (!bSuccess && !Error.IsEmpty())
+        {
+            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+        }
     }
 
-    static TSharedRef<SWidget> BuildManagementButton(
-        const TSharedRef<FPruneState>& State,
-        const TSharedRef<FPruneLayoutContext>& LayoutContext)
+    static void OpenNewFilterEditor(
+        const TWeakPtr<FPruneState>& WeakState,
+        const TWeakPtr<const IDetailsView>& WeakDetailsView)
     {
-        return SNew(SBox)
-            .AddMetaData<FTagMetaData>(PruneManagerTag)
-            .HAlign(HAlign_Right)
-            [
-                SNew(SComboButton)
-                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
-                .ContentPadding(FMargin(7.0f, 2.0f))
-                .ToolTipText(LOCTEXT(
-                    "PruneManagerTooltip",
-                    "Create, edit, rename, and delete Prune presets. Presets appear as native Details section buttons."))
-                .OnGetMenuContent_Lambda([State, LayoutContext]()
-                {
-                    return BuildManagementMenu(State, LayoutContext);
-                })
-                .ButtonContent()
-                [
-                    SNew(STextBlock)
-                    .Text(LOCTEXT("PruneManagerButton", "Prune"))
-                    .TextStyle(FAppStyle::Get(), "SmallText")
-                ]
-            ];
+        const TSharedPtr<FPruneState> State = WeakState.Pin();
+        const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+        if (!State.IsValid() || !DetailsView.IsValid())
+        {
+            return;
+        }
+
+        const TSharedPtr<FPruneLayoutContext> Context =
+            State->FindLatestLayoutContextForDetailsView(DetailsView);
+        if (!Context.IsValid())
+        {
+            return;
+        }
+
+        FPruneFilterEditorData InitialData;
+        InitialData.Name = FString();
+        InitialData.bGlobal = Context->GetActorClass() == nullptr;
+        InitialData.ScopeClassName = InitialData.bGlobal
+            ? NAME_None
+            : Context->GetActorClassName();
+        const TOptional<FFilterEditorResult> Result = ShowFilterEditor(
+            Context.ToSharedRef(),
+            InitialData,
+            true,
+            false);
+
+        if (Result.IsSet())
+        {
+            HandleEditorResult(
+                State.ToSharedRef(),
+                Context.ToSharedRef(),
+                nullptr,
+                Result.GetValue());
+        }
+    }
+
+    static void OpenActiveFilterEditor(
+        const TWeakPtr<FPruneState>& WeakState,
+        const TWeakPtr<const IDetailsView>& WeakDetailsView)
+    {
+        const TSharedPtr<FPruneState> State = WeakState.Pin();
+        const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+        if (!State.IsValid() || !DetailsView.IsValid())
+        {
+            return;
+        }
+
+        const TSharedPtr<FPruneLayoutContext> Context =
+            State->FindLatestLayoutContextForDetailsView(DetailsView);
+        if (!Context.IsValid())
+        {
+            return;
+        }
+
+        FPruneEditableFilter Filter;
+        FPruneFilterEditorData InitialData;
+        if (!State->ResolveSingleActiveFilter(Context.ToSharedRef(), Filter)
+            || !State->BuildEditorData(Context.ToSharedRef(), Filter, InitialData))
+        {
+            return;
+        }
+
+        const TOptional<FFilterEditorResult> Result = ShowFilterEditor(
+            Context.ToSharedRef(),
+            InitialData,
+            false,
+            Filter.Kind == EPruneFilterKind::Native);
+
+        if (Result.IsSet())
+        {
+            HandleEditorResult(
+                State.ToSharedRef(),
+                Context.ToSharedRef(),
+                &Filter,
+                Result.GetValue());
+        }
     }
 
     static bool WidgetHasTag(const SWidget& Widget, FName Tag)
     {
-        const TSharedPtr<FTagMetaData> TagMeta =
-            Widget.GetMetaData<FTagMetaData>();
-
+        const TSharedPtr<FTagMetaData> TagMeta = Widget.GetMetaData<FTagMetaData>();
         return TagMeta.IsValid() && TagMeta->Tag == Tag;
-    }
-
-    static int32 CountDescendantsOfType(
-        SWidget& Widget,
-        FName WidgetType,
-        int32 RemainingDepth)
-    {
-        if (RemainingDepth < 0)
-        {
-            return 0;
-        }
-
-        int32 Count = Widget.GetType() == WidgetType ? 1 : 0;
-
-        FChildren* Children = Widget.GetChildren();
-        if (Children == nullptr)
-        {
-            return Count;
-        }
-
-        for (int32 Index = 0; Index < Children->Num(); ++Index)
-        {
-            Count += CountDescendantsOfType(
-                Children->GetChildAt(Index).Get(),
-                WidgetType,
-                RemainingDepth - 1);
-        }
-
-        return Count;
-    }
-
-    static SWrapBox* FindSectionSelectorRecursive(SWidget& Widget)
-    {
-        // Primary path: UE 5.8 explicitly tags the section selector SWrapBox
-        // with FTagMetaData("SectionView").
-        if (WidgetHasTag(Widget, SectionViewTag))
-        {
-            if (Widget.GetType() == FName(TEXT("SWrapBox")))
-            {
-                return static_cast<SWrapBox*>(&Widget);
-            }
-        }
-
-        FChildren* Children = Widget.GetChildren();
-        if (Children == nullptr)
-        {
-            return nullptr;
-        }
-
-        for (int32 Index = 0; Index < Children->Num(); ++Index)
-        {
-            TSharedRef<SWidget> Child = Children->GetChildAt(Index);
-            if (SWrapBox* Found = FindSectionSelectorRecursive(Child.Get()))
-            {
-                return Found;
-            }
-        }
-
-        // Fallback for cases where another Slate wrapper strips or replaces
-        // metadata. The native section row is an SWrapBox whose direct slot
-        // contents contain multiple section checkboxes.
-        if (Widget.GetType() == FName(TEXT("SWrapBox")))
-        {
-            const int32 CheckBoxCount = CountDescendantsOfType(
-                Widget,
-                FName(TEXT("SCheckBox")),
-                3);
-
-            if (CheckBoxCount >= 2)
-            {
-                return static_cast<SWrapBox*>(&Widget);
-            }
-        }
-
-        return nullptr;
     }
 
     static bool HasWidgetTagRecursive(SWidget& Widget, FName Tag)
@@ -678,12 +860,110 @@ namespace PruneDetailsCustomizationPrivate
         return false;
     }
 
-    static bool HasPruneManager(SWrapBox& SectionSelector)
+    static TSharedRef<SWidget> BuildPlusButton(
+        const TWeakPtr<FPruneState>& WeakState,
+        const TWeakPtr<const IDetailsView>& WeakDetailsView)
     {
-        return HasWidgetTagRecursive(SectionSelector, PruneManagerTag);
+        return SNew(SCheckBox)
+            .Style(FAppStyle::Get(), "DetailsView.SectionButton")
+            .IsChecked_Lambda([]()
+            {
+                return ECheckBoxState::Unchecked;
+            })
+            .ToolTipText(LOCTEXT("NewFilterTooltip", "Create a new Prune filter"))
+            .OnCheckStateChanged_Lambda([WeakState, WeakDetailsView](ECheckBoxState)
+            {
+                OpenNewFilterEditor(WeakState, WeakDetailsView);
+            })
+            [
+                SNew(STextBlock)
+                .TextStyle(FAppStyle::Get(), "SmallText")
+                .Text(FText::FromString(TEXT("+")))
+            ];
     }
 
-    static bool InjectManagementButton(
+    static TSharedRef<SWidget> BuildFilterGearIcon()
+    {
+        return SNew(SBox)
+            .WidthOverride(18.0f)
+            .HeightOverride(18.0f)
+            [
+                SNew(SOverlay)
+
+                + SOverlay::Slot()
+                .HAlign(HAlign_Left)
+                .VAlign(VAlign_Top)
+                [
+                    SNew(SImage)
+                    .Image(FAppStyle::Get().GetBrush("Icons.Filter"))
+                ]
+
+                + SOverlay::Slot()
+                .HAlign(HAlign_Right)
+                .VAlign(VAlign_Bottom)
+                [
+                    SNew(SBox)
+                    .WidthOverride(9.0f)
+                    .HeightOverride(9.0f)
+                    [
+                        SNew(SImage)
+                        .Image(FAppStyle::Get().GetBrush("Icons.Settings"))
+                    ]
+                ]
+            ];
+    }
+
+    static TSharedRef<SWidget> BuildEditButton(
+        const TWeakPtr<FPruneState>& WeakState,
+        const TWeakPtr<const IDetailsView>& WeakDetailsView)
+    {
+        return SNew(SButton)
+            .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+            .ContentPadding(FMargin(4.0f, 2.0f))
+            .IsEnabled_Lambda([WeakState, WeakDetailsView]()
+            {
+                const TSharedPtr<FPruneState> State = WeakState.Pin();
+                const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+                if (!State.IsValid() || !DetailsView.IsValid())
+                {
+                    return false;
+                }
+
+                const TSharedPtr<FPruneLayoutContext> Context =
+                    State->FindLatestLayoutContextForDetailsView(DetailsView);
+                return Context.IsValid()
+                    && State->CanEditActiveFilter(Context.ToSharedRef());
+            })
+            .ToolTipText_Lambda([WeakState, WeakDetailsView]()
+            {
+                const TSharedPtr<FPruneState> State = WeakState.Pin();
+                const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+                if (State.IsValid() && DetailsView.IsValid())
+                {
+                    const TSharedPtr<FPruneLayoutContext> Context =
+                        State->FindLatestLayoutContextForDetailsView(DetailsView);
+                    FPruneEditableFilter Filter;
+                    if (Context.IsValid()
+                        && State->ResolveSingleActiveFilter(Context.ToSharedRef(), Filter))
+                    {
+                        return FText::Format(
+                            LOCTEXT("EditFilterTooltipNamed", "Edit filter: {0}"),
+                            Filter.DisplayName);
+                    }
+                }
+                return LOCTEXT("EditFilterTooltipDisabled", "Select one editable filter to edit it. All and Ctrl-multiselections cannot be edited.");
+            })
+            .OnClicked_Lambda([WeakState, WeakDetailsView]()
+            {
+                OpenActiveFilterEditor(WeakState, WeakDetailsView);
+                return FReply::Handled();
+            })
+            [
+                BuildFilterGearIcon()
+            ];
+    }
+
+    static bool InjectPruneControls(
         const TWeakPtr<FPruneState>& WeakState,
         const TWeakPtr<FPruneLayoutContext>& WeakLayoutContext)
     {
@@ -694,108 +974,138 @@ namespace PruneDetailsCustomizationPrivate
             return false;
         }
 
-        const TSharedPtr<const IDetailsView> DetailsView =
-            Context->GetDetailsView();
-        if (!DetailsView.IsValid())
+        const TSharedPtr<const IDetailsView> ConstDetailsView = Context->GetDetailsView();
+        if (!ConstDetailsView.IsValid())
         {
             return false;
         }
 
-        // IDetailsView is itself a Slate widget. UE 5.8 tags the native section
-        // SWrapBox with FTagMetaData("SectionView"). Prune finds that exact row
-        // without replacing the Details view or modifying engine source.
-        IDetailsView* MutableDetailsView =
-            const_cast<IDetailsView*>(DetailsView.Get());
-
-        // If the manager is already anywhere in the live Details tree, the
-        // native section row has already been wrapped and there is nothing to
-        // repair. This also keeps the periodic guard effectively free once the
-        // UI is installed.
-        if (HasWidgetTagRecursive(*MutableDetailsView, PruneManagerTag))
+        IDetailsView* DetailsView = const_cast<IDetailsView*>(ConstDetailsView.Get());
+        const TSharedPtr<SWidget> FilterAreaWidget = DetailsView->GetFilterAreaWidget();
+        if (!FilterAreaWidget.IsValid())
         {
+            return false;
+        }
+
+        // If the wrapper already exists, recover SectionView so the new layout
+        // context can still read the native checked state after a Details refresh.
+        if (HasWidgetTagRecursive(FilterAreaWidget.ToSharedRef().Get(), PruneSectionRowWrapperTag))
+        {
+            FChildren* FilterChildren = FilterAreaWidget->GetChildren();
+            if (FilterChildren != nullptr)
+            {
+                TFunction<TSharedPtr<SWidget>(const TSharedRef<SWidget>&)> FindSectionView;
+                FindSectionView = [&FindSectionView](const TSharedRef<SWidget>& Widget) -> TSharedPtr<SWidget>
+                {
+                    if (WidgetHasTag(Widget.Get(), SectionViewTag))
+                    {
+                        return Widget;
+                    }
+
+                    FChildren* Children = Widget->GetChildren();
+                    if (Children != nullptr)
+                    {
+                        for (int32 Index = 0; Index < Children->Num(); ++Index)
+                        {
+                            const TSharedRef<SWidget> Child = Children->GetChildAt(Index);
+                            if (TSharedPtr<SWidget> Found = FindSectionView(Child))
+                            {
+                                return Found;
+                            }
+                        }
+                    }
+                    return nullptr;
+                };
+
+                if (TSharedPtr<SWidget> ExistingSectionView = FindSectionView(FilterAreaWidget.ToSharedRef()))
+                {
+                    Context->SetSectionSelectorWidget(ExistingSectionView);
+                }
+            }
             return true;
         }
 
-        SWrapBox* SectionSelector =
-            FindSectionSelectorRecursive(*MutableDetailsView);
-
-        if (SectionSelector == nullptr)
+        if (FilterAreaWidget->GetType() != FName(TEXT("SVerticalBox")))
         {
             return false;
         }
 
-        // Do not add Prune as a child of the SWrapBox itself. RebuildSectionSelector()
-        // clears every child of that box, and a FillEmptySpace slot is also not a
-        // reliable way to reserve a right-aligned management area. Instead, wrap
-        // Unreal's existing SectionView as the left, fill-width child of a new
-        // horizontal row and place Prune in an auto-width slot on the right.
-        //
-        // In UE 5.8 SDetailsView constructs SectionView as the second and final
-        // child of FilterRowVBox, so removing it and appending the replacement row
-        // preserves its original vertical position beneath the search box. Unreal
-        // continues to own and rebuild the original SWrapBox normally.
-        const TSharedPtr<SWidget> ParentWidget = SectionSelector->GetParentWidget();
-        if (!ParentWidget.IsValid() || ParentWidget->GetType() != FName(TEXT("SVerticalBox")))
+        SVerticalBox* FilterAreaVBox = static_cast<SVerticalBox*>(FilterAreaWidget.Get());
+        FChildren* FilterChildren = FilterAreaVBox->GetChildren();
+        if (FilterChildren == nullptr)
         {
             return false;
         }
 
-        SVerticalBox* FilterRowVBox = static_cast<SVerticalBox*>(ParentWidget.Get());
-        const TSharedRef<SWidget> SectionSelectorRef = SectionSelector->AsShared();
+        TSharedPtr<SWidget> SectionSelectorWidget;
+        for (int32 Index = 0; Index < FilterChildren->Num(); ++Index)
+        {
+            TSharedRef<SWidget> Child = FilterChildren->GetChildAt(Index);
+            if (WidgetHasTag(Child.Get(), SectionViewTag)
+                && Child->GetType() == FName(TEXT("SWrapBox")))
+            {
+                SectionSelectorWidget = Child;
+                break;
+            }
+        }
 
-        if (FilterRowVBox->RemoveSlot(SectionSelectorRef) == INDEX_NONE)
+        if (!SectionSelectorWidget.IsValid())
         {
             return false;
         }
+
+        Context->SetSectionSelectorWidget(SectionSelectorWidget);
+
+        const TSharedRef<SWidget> SectionSelectorRef = SectionSelectorWidget.ToSharedRef();
+        const int32 RemovedIndex = FilterAreaVBox->RemoveSlot(SectionSelectorRef);
+        if (RemovedIndex == INDEX_NONE)
+        {
+            return false;
+        }
+
+        const TWeakPtr<const IDetailsView> WeakDetailsView = ConstDetailsView;
 
         TSharedRef<SHorizontalBox> PruneSectionRow =
             SNew(SHorizontalBox)
             .AddMetaData<FTagMetaData>(PruneSectionRowWrapperTag)
+
             + SHorizontalBox::Slot()
             .FillWidth(1.0f)
             .VAlign(VAlign_Center)
             [
                 SectionSelectorRef
             ]
+
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .VAlign(VAlign_Center)
+            .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+            [
+                BuildPlusButton(WeakState, WeakDetailsView)
+            ]
+
             + SHorizontalBox::Slot()
             .AutoWidth()
             .VAlign(VAlign_Center)
             .Padding(8.0f, 0.0f, 0.0f, 0.0f)
             [
-                BuildManagementButton(State.ToSharedRef(), Context.ToSharedRef())
+                BuildEditButton(WeakState, WeakDetailsView)
             ];
 
-        FilterRowVBox->AddSlot()
+        FilterAreaVBox->InsertSlot(RemovedIndex)
             .AutoHeight()
             .Padding(8.0f, 2.0f, 8.0f, 7.0f)
             [
                 PruneSectionRow
             ];
 
-        FilterRowVBox->Invalidate(EInvalidateWidgetReason::Layout);
+        FilterAreaVBox->Invalidate(EInvalidateWidgetReason::Layout);
 
         UE_LOG(
             LogPruneDetails,
             Log,
-            TEXT("Prune wrapped the native Details section row and added its management control."));
-
+            TEXT("Prune added + and edit controls beside the native Details SectionView."));
         return true;
-    }
-
-}
-
-
-void FPruneDetailsCustomization::EnsureManagementButtons(
-    TSharedRef<FPruneState> State)
-{
-    const TWeakPtr<FPruneState> WeakState = State;
-
-    for (const TSharedRef<FPruneLayoutContext>& Context :
-        State->GetLiveLayoutContexts())
-    {
-        PruneDetailsCustomizationPrivate::InjectManagementButton(
-            WeakState,
-            Context);
     }
 }
 
@@ -826,32 +1136,25 @@ void FPruneDetailsCustomization::ExtendActorDetails(
 
     const TSharedPtr<const IDetailsView> DetailsView =
         DetailBuilder.GetDetailsViewSharedPtr();
-
     if (!DetailsView.IsValid())
     {
         return;
     }
 
+    UClass* ActorClass =
+        PruneDetailsCustomizationPrivate::GetSingleActorClass(SelectedActors);
+
     const TSharedRef<FPruneLayoutContext> LayoutContext =
         MakeShared<FPruneLayoutContext>(
             PruneDetailsCustomizationPrivate::BuildSelectionLabel(SelectedActors),
-            DetailsView);
+            DetailsView,
+            ActorClass);
 
     State->RegisterLayoutContext(LayoutContext);
-
     const TWeakPtr<FPruneState> WeakState = State;
-    const TWeakPtr<IPropertyUtilities> WeakUtilities =
-        DetailBuilder.GetPropertyUtilities();
 
-    // IMPORTANT: the callback itself owns LayoutContext strongly.
-    // SortCategories runs later, after ExtendActorDetails has returned. In
-    // 0.4.0 the callback kept only a weak context, so removing the old Prune
-    // Details-tree widget also removed the last strong owner. The context was
-    // therefore destroyed before this callback ever ran. Keeping it here ties
-    // the context lifetime directly to the DetailLayoutBuilder that stores the
-    // callback, without leaking it beyond the life of that layout.
     DetailBuilder.SortCategories(
-        [WeakState, LayoutContext, WeakUtilities](
+        [WeakState, LayoutContext](
             const TMap<FName, IDetailCategoryBuilder*>& Categories)
         {
             const TSharedPtr<FPruneState> LiveState = WeakState.Pin();
@@ -860,39 +1163,35 @@ void FPruneDetailsCustomization::ExtendActorDetails(
                 return;
             }
 
-            PruneDetailsCustomizationPrivate::RestoreStandardCategoryGrouping(
-                Categories);
+            PruneDetailsCustomizationPrivate::RestoreStandardCategoryGrouping(Categories);
 
+            // Capture the finished native order before applying any active
+            // filter-specific ordering.
             LayoutContext->UpdateFromFinalCategories(Categories);
 
-            // Native sections must be registered before SDetailsView performs
-            // its section-selector rebuild at the end of the object refresh.
+            // Register Prune filters and apply persisted Epic-section overrides
+            // before SDetailsView rebuilds the section selector.
             LiveState->SyncNativeSectionsForContext(LayoutContext);
 
-            // The engine rebuilds SectionSelectorBox after category generation,
-            // which clears any custom children. Inject Prune's management
-            // control deferred, after that native rebuild has completed.
-            if (const TSharedPtr<IPropertyUtilities> Utilities =
-                WeakUtilities.Pin())
-            {
-                const TWeakPtr<FPruneLayoutContext> WeakLayoutContext =
-                    LayoutContext;
+            // Recover/install the native SectionView pointer before asking the
+            // state which filter is currently selected. On subsequent refreshes
+            // the wrapper already exists, so this simply reconnects the new
+            // layout context to the existing selector widget.
+            PruneDetailsCustomizationPrivate::InjectPruneControls(
+                WeakState,
+                LayoutContext);
 
-                Utilities->EnqueueDeferredAction(
-                    FSimpleDelegate::CreateLambda(
-                        [WeakState, WeakLayoutContext]()
-                        {
-                            PruneDetailsCustomizationPrivate::InjectManagementButton(
-                                WeakState,
-                                WeakLayoutContext);
-                        }));
-            }
+            const TArray<FName> ActiveOrder =
+                LiveState->GetActiveCategoryOrder(LayoutContext);
+            PruneDetailsCustomizationPrivate::ApplyStoredCategoryOrder(
+                ActiveOrder,
+                Categories);
         });
 
     UE_LOG(
         LogPruneDetails,
         Verbose,
-        TEXT("Prune attached native-section preset support to %d Actor(s)."),
+        TEXT("Prune attached filter editing to %d Actor(s)."),
         SelectedActors.Num());
 }
 
