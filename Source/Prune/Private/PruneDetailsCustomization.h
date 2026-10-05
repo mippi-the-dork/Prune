@@ -10,11 +10,8 @@ class AActor;
 class FPruneLayoutContext;
 class FPruneState;
 class IDetailLayoutBuilder;
-class SWidget;
 
-/**
- * Stateless helper used by Prune's OnExtendActorDetails delegate.
- */
+/** Stateless helper used by Prune's OnExtendActorDetails delegate. */
 class FPruneDetailsCustomization final
 {
 public:
@@ -22,9 +19,4 @@ public:
         TSharedRef<FPruneState> State,
         IDetailLayoutBuilder& DetailBuilder,
         const TArray<TWeakObjectPtr<AActor>>& SelectedActors);
-
-private:
-    static TSharedRef<SWidget> BuildControlWidget(
-        const TSharedRef<FPruneState>& State,
-        const TSharedRef<FPruneLayoutContext>& LayoutContext);
 };

@@ -3,8 +3,12 @@
 #include "PruneState.h"
 
 #include "DetailCategoryBuilder.h"
+#include "GameFramework/Actor.h"
+#include "IDetailsView.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Guid.h"
+#include "Modules/ModuleManager.h"
+#include "PropertyEditorModule.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPrune, Log, All);
 
@@ -12,19 +16,13 @@ namespace PruneStatePrivate
 {
     static const TCHAR* RootSection = TEXT("Prune.UserState");
     static const TCHAR* PresetIdsKey = TEXT("PresetIds");
-    static const TCHAR* SelectionKeysKey = TEXT("SelectionKeys");
     static const TCHAR* HiddenCategoriesKey = TEXT("HiddenCategoryIds");
-    static const TCHAR* ActivePresetIdKey = TEXT("ActivePresetId");
     static const TCHAR* NameKey = TEXT("Name");
+    static constexpr int32 FirstPruneSectionOrder = 10000;
 
     static FString MakePresetSection(const FString& PresetId)
     {
         return FString::Printf(TEXT("Prune.Preset.%s"), *PresetId);
-    }
-
-    static FString MakeSelectionSection(int32 Index)
-    {
-        return FString::Printf(TEXT("Prune.Selection.%d"), Index);
     }
 
     static TArray<FString> NamesToStrings(const TSet<FName>& Names)
@@ -62,24 +60,21 @@ namespace PruneStatePrivate
 }
 
 FPruneLayoutContext::FPruneLayoutContext(
-    FString InSelectionKey,
-    FText InSelectionLabel)
-    : SelectionKey(MoveTemp(InSelectionKey))
-    , SelectionLabel(MoveTemp(InSelectionLabel))
+    FText InSelectionLabel,
+    TSharedPtr<const IDetailsView> InDetailsView)
+    : SelectionLabel(MoveTemp(InSelectionLabel))
+    , DetailsView(InDetailsView)
 {
 }
 
 void FPruneLayoutContext::UpdateFromFinalCategories(
-    const TMap<FName, IDetailCategoryBuilder*>& InCategories,
-    FName ExcludedCategoryId)
+    const TMap<FName, IDetailCategoryBuilder*>& InCategories)
 {
     RawCategories.Reset();
     CategoryGroups.Reset();
-    CategoryBuilders.Reset();
 
     RawCategories.Reserve(InCategories.Num());
     CategoryGroups.Reserve(InCategories.Num());
-    CategoryBuilders.Reserve(InCategories.Num());
 
     TMap<FString, int32> GroupIndexByDisplayLabel;
 
@@ -88,9 +83,7 @@ void FPruneLayoutContext::UpdateFromFinalCategories(
         const FName CategoryId = Entry.Key;
         IDetailCategoryBuilder* Category = Entry.Value;
 
-        if (CategoryId.IsNone()
-            || CategoryId == ExcludedCategoryId
-            || Category == nullptr)
+        if (CategoryId.IsNone() || Category == nullptr)
         {
             continue;
         }
@@ -102,8 +95,6 @@ void FPruneLayoutContext::UpdateFromFinalCategories(
         FPruneCategoryInfo& RawInfo = RawCategories.AddDefaulted_GetRef();
         RawInfo.Id = CategoryId;
         RawInfo.DisplayName = DisplayName;
-
-        CategoryBuilders.Add(CategoryId, Category);
 
         const FString DisplayKey = DisplayName.ToString();
         int32* ExistingGroupIndex = GroupIndexByDisplayLabel.Find(DisplayKey);
@@ -122,8 +113,6 @@ void FPruneLayoutContext::UpdateFromFinalCategories(
         }
     }
 
-    // The menu and diagnostic log are alphabetical on purpose. This is
-    // independent of the Details panel's visual category order.
     RawCategories.Sort(
         [](const FPruneCategoryInfo& A, const FPruneCategoryInfo& B)
         {
@@ -159,91 +148,36 @@ TArray<FPruneCategoryGroupInfo> FPruneLayoutContext::GetCategoryGroups() const
     return CategoryGroups;
 }
 
-int32 FPruneLayoutContext::GetHiddenCurrentCategoryCount(
-    const FPruneState& State) const
+TArray<FName> FPruneLayoutContext::GetCategoryIds() const
 {
-    int32 Count = 0;
+    TArray<FName> Result;
+    Result.Reserve(RawCategories.Num());
 
-    for (const FPruneCategoryGroupInfo& Group : CategoryGroups)
+    for (const FPruneCategoryInfo& Category : RawCategories)
     {
-        if (!State.AreAllCategoriesVisible(SelectionKey, Group.Ids))
-        {
-            ++Count;
-        }
+        Result.Add(Category.Id);
     }
 
-    return Count;
+    return Result;
 }
 
-void FPruneLayoutContext::ApplyCategoryVisibility(
-    FName CategoryId,
-    bool bVisible)
-{
-    if (IDetailCategoryBuilder** Category = CategoryBuilders.Find(CategoryId))
-    {
-        if (*Category != nullptr)
-        {
-            (*Category)->SetCategoryVisibility(bVisible);
-        }
-    }
-}
-
-void FPruneLayoutContext::ApplyCategoryGroupVisibility(
-    const TArray<FName>& CategoryIds,
-    bool bVisible)
-{
-    for (const FName CategoryId : CategoryIds)
-    {
-        ApplyCategoryVisibility(CategoryId, bVisible);
-    }
-}
-
-void FPruneLayoutContext::ApplyHiddenState(const FPruneState& State)
-{
-    for (const TPair<FName, IDetailCategoryBuilder*>& Entry : CategoryBuilders)
-    {
-        if (Entry.Value != nullptr)
-        {
-            Entry.Value->SetCategoryVisibility(
-                State.IsCategoryVisible(SelectionKey, Entry.Key));
-        }
-    }
-}
-
-void FPruneLayoutContext::ShowAllCurrentCategories()
-{
-    for (const TPair<FName, IDetailCategoryBuilder*>& Entry : CategoryBuilders)
-    {
-        if (Entry.Value != nullptr)
-        {
-            Entry.Value->SetCategoryVisibility(true);
-        }
-    }
-}
-
-void FPruneLayoutContext::LogCurrentCategories(
-    const FPruneState& State) const
+void FPruneLayoutContext::LogCurrentCategories() const
 {
     UE_LOG(
         LogPrune,
         Log,
-        TEXT("Prune current finished category set: %d categories | Selection: %s | Key: %s | Mode: %s"),
+        TEXT("Prune current finished category set: %d categories | Selection: %s"),
         RawCategories.Num(),
-        *SelectionLabel.ToString(),
-        *SelectionKey,
-        *State.GetSelectionModeLabel(SelectionKey).ToString());
+        *SelectionLabel.ToString());
 
     for (const FPruneCategoryInfo& Category : RawCategories)
     {
         UE_LOG(
             LogPrune,
             Log,
-            TEXT("  %s | Display: %s | Visible: %s"),
+            TEXT("  %s | Display: %s"),
             *Category.Id.ToString(),
-            *Category.DisplayName.ToString(),
-            State.IsCategoryVisible(SelectionKey, Category.Id)
-                ? TEXT("Yes")
-                : TEXT("No"));
+            *Category.DisplayName.ToString());
     }
 }
 
@@ -252,164 +186,9 @@ FPruneState::FPruneState()
     LoadPersistentState();
 }
 
-bool FPruneState::IsCategoryVisible(
-    const FString& SelectionKey,
-    FName CategoryId) const
+FPruneState::~FPruneState()
 {
-    if (const FSelectionState* Selection = SelectionStates.Find(SelectionKey))
-    {
-        return !Selection->HiddenCategories.Contains(CategoryId);
-    }
-
-    return true;
-}
-
-bool FPruneState::AreAllCategoriesVisible(
-    const FString& SelectionKey,
-    const TArray<FName>& CategoryIds) const
-{
-    for (const FName CategoryId : CategoryIds)
-    {
-        if (!IsCategoryVisible(SelectionKey, CategoryId))
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool FPruneState::AreAnyCategoriesVisible(
-    const FString& SelectionKey,
-    const TArray<FName>& CategoryIds) const
-{
-    for (const FName CategoryId : CategoryIds)
-    {
-        if (IsCategoryVisible(SelectionKey, CategoryId))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool FPruneState::IsSelectionCustom(const FString& SelectionKey) const
-{
-    const FSelectionState* Selection = SelectionStates.Find(SelectionKey);
-
-    return Selection != nullptr
-        && Selection->ActivePresetId.IsEmpty()
-        && !Selection->HiddenCategories.IsEmpty();
-}
-
-FText FPruneState::GetSelectionModeLabel(const FString& SelectionKey) const
-{
-    const FSelectionState* Selection = SelectionStates.Find(SelectionKey);
-
-    if (Selection != nullptr && !Selection->ActivePresetId.IsEmpty())
-    {
-        if (const FPresetData* Preset = PresetsById.Find(Selection->ActivePresetId))
-        {
-            return FText::FromString(Preset->Name);
-        }
-    }
-
-    if (Selection != nullptr && !Selection->HiddenCategories.IsEmpty())
-    {
-        return FText::FromString(TEXT("Custom"));
-    }
-
-    return FText::FromString(TEXT("All Categories"));
-}
-
-FString FPruneState::GetActivePresetId(const FString& SelectionKey) const
-{
-    if (const FSelectionState* Selection = SelectionStates.Find(SelectionKey))
-    {
-        if (!Selection->ActivePresetId.IsEmpty()
-            && PresetsById.Contains(Selection->ActivePresetId))
-        {
-            return Selection->ActivePresetId;
-        }
-    }
-
-    return FString();
-}
-
-void FPruneState::SetCategoriesVisible(
-    const FString& SelectionKey,
-    const TArray<FName>& CategoryIds,
-    bool bVisible)
-{
-    if (SelectionKey.IsEmpty() || CategoryIds.IsEmpty())
-    {
-        return;
-    }
-
-    FSelectionState& Selection = SelectionStates.FindOrAdd(SelectionKey);
-
-    // Any direct checkbox edit leaves a named preset and becomes Custom.
-    Selection.ActivePresetId.Reset();
-
-    for (const FName CategoryId : CategoryIds)
-    {
-        if (CategoryId.IsNone())
-        {
-            continue;
-        }
-
-        if (bVisible)
-        {
-            Selection.HiddenCategories.Remove(CategoryId);
-        }
-        else
-        {
-            Selection.HiddenCategories.Add(CategoryId);
-        }
-    }
-
-    if (Selection.HiddenCategories.IsEmpty())
-    {
-        SelectionStates.Remove(SelectionKey);
-    }
-
-    SavePersistentState();
-
-    CompactContexts();
-    for (const TWeakPtr<FPruneLayoutContext>& WeakContext : LayoutContexts)
-    {
-        if (const TSharedPtr<FPruneLayoutContext> Context = WeakContext.Pin())
-        {
-            if (Context->GetSelectionKey() == SelectionKey)
-            {
-                Context->ApplyCategoryGroupVisibility(CategoryIds, bVisible);
-            }
-        }
-    }
-}
-
-void FPruneState::ShowAllCategories(const FString& SelectionKey)
-{
-    if (SelectionKey.IsEmpty())
-    {
-        return;
-    }
-
-    SelectionStates.Remove(SelectionKey);
-    SavePersistentState();
-
-    CompactContexts();
-    for (const TWeakPtr<FPruneLayoutContext>& WeakContext : LayoutContexts)
-    {
-        if (const TSharedPtr<FPruneLayoutContext> Context = WeakContext.Pin())
-        {
-            if (Context->GetSelectionKey() == SelectionKey)
-            {
-                Context->ShowAllCurrentCategories();
-            }
-        }
-    }
+    RemoveAllNativeSections();
 }
 
 TArray<FPrunePresetSummary> FPruneState::GetPresets() const
@@ -433,33 +212,20 @@ TArray<FPrunePresetSummary> FPruneState::GetPresets() const
     return Result;
 }
 
-bool FPruneState::ApplyPreset(
-    const FString& SelectionKey,
-    const FString& PresetId)
+TSet<FName> FPruneState::GetPresetHiddenCategories(
+    const FString& PresetId) const
 {
-    if (SelectionKey.IsEmpty())
+    if (const FPresetData* Preset = PresetsById.Find(PresetId))
     {
-        return false;
+        return Preset->HiddenCategories;
     }
 
-    const FPresetData* Preset = PresetsById.Find(PresetId);
-    if (Preset == nullptr)
-    {
-        return false;
-    }
-
-    FSelectionState& Selection = SelectionStates.FindOrAdd(SelectionKey);
-    Selection.HiddenCategories = Preset->HiddenCategories;
-    Selection.ActivePresetId = PresetId;
-
-    SavePersistentState();
-    ApplySelectionStateToLiveContexts(SelectionKey);
-    return true;
+    return TSet<FName>();
 }
 
-bool FPruneState::SaveCurrentAsPreset(
-    const FString& SelectionKey,
+bool FPruneState::CreatePreset(
     const FString& PresetName,
+    const TSet<FName>& HiddenCategories,
     FString& OutError)
 {
     OutError.Reset();
@@ -485,22 +251,56 @@ bool FPruneState::SaveCurrentAsPreset(
     FPresetData Preset;
     Preset.Id = FGuid::NewGuid().ToString(EGuidFormats::Digits);
     Preset.Name = CleanName;
+    Preset.HiddenCategories = HiddenCategories;
 
-    if (const FSelectionState* Current = SelectionStates.Find(SelectionKey))
-    {
-        Preset.HiddenCategories = Current->HiddenCategories;
-    }
-
-    const FString NewPresetId = Preset.Id;
-    PresetsById.Add(NewPresetId, MoveTemp(Preset));
-
-    if (!SelectionKey.IsEmpty())
-    {
-        FSelectionState& Current = SelectionStates.FindOrAdd(SelectionKey);
-        Current.ActivePresetId = NewPresetId;
-    }
+    PresetsById.Add(Preset.Id, MoveTemp(Preset));
 
     SavePersistentState();
+    RebuildAllNativeSections();
+    RefreshDetailsViews();
+    return true;
+}
+
+bool FPruneState::UpdatePreset(
+    const FString& PresetId,
+    const FString& PresetName,
+    const TSet<FName>& HiddenCategories,
+    FString& OutError)
+{
+    OutError.Reset();
+
+    FPresetData* Preset = PresetsById.Find(PresetId);
+    if (Preset == nullptr)
+    {
+        OutError = TEXT("The Prune preset no longer exists.");
+        return false;
+    }
+
+    const FString CleanName = PresetName.TrimStartAndEnd();
+    if (CleanName.IsEmpty())
+    {
+        OutError = TEXT("Preset name cannot be empty.");
+        return false;
+    }
+
+    for (const TPair<FString, FPresetData>& Entry : PresetsById)
+    {
+        if (Entry.Key != PresetId
+            && Entry.Value.Name.Equals(CleanName, ESearchCase::IgnoreCase))
+        {
+            OutError = FString::Printf(
+                TEXT("A Prune preset named '%s' already exists."),
+                *CleanName);
+            return false;
+        }
+    }
+
+    Preset->Name = CleanName;
+    Preset->HiddenCategories = HiddenCategories;
+
+    SavePersistentState();
+    RebuildAllNativeSections();
+    RefreshDetailsViews();
     return true;
 }
 
@@ -511,30 +311,22 @@ bool FPruneState::DeletePreset(const FString& PresetId)
         return false;
     }
 
-    TArray<FString> EmptySelectionKeys;
-
-    for (TPair<FString, FSelectionState>& Entry : SelectionStates)
+    if (FPropertyEditorModule* PropertyEditor =
+        FModuleManager::GetModulePtr<FPropertyEditorModule>(TEXT("PropertyEditor")))
     {
-        if (Entry.Value.ActivePresetId == PresetId)
-        {
-            // Preserve the actual hidden categories. Deleting a preset should
-            // never unexpectedly reveal Details categories; affected classes
-            // simply become Custom instead.
-            Entry.Value.ActivePresetId.Reset();
-
-            if (Entry.Value.HiddenCategories.IsEmpty())
-            {
-                EmptySelectionKeys.Add(Entry.Key);
-            }
-        }
-    }
-
-    for (const FString& Key : EmptySelectionKeys)
-    {
-        SelectionStates.Remove(Key);
+        PropertyEditor->RemoveSection(
+            AActor::StaticClass()->GetFName(),
+            MakeSectionName(PresetId));
     }
 
     SavePersistentState();
+    RebuildAllNativeSections();
+
+    // A live Details view may currently have the deleted section selected.
+    // Reset those views to All before the refresh so they never become an
+    // empty filter with a now-invalid section name.
+    ResetLiveViewsToAll();
+    RefreshDetailsViews();
     return true;
 }
 
@@ -555,16 +347,56 @@ void FPruneState::RegisterLayoutContext(
     }
 }
 
+void FPruneState::SyncNativeSectionsForContext(
+    const TSharedRef<FPruneLayoutContext>& Context)
+{
+    bool bDiscoveredNewCategory = false;
+
+    for (const FName CategoryId : Context->GetCategoryIds())
+    {
+        if (!CategoryId.IsNone() && !KnownCategoryIds.Contains(CategoryId))
+        {
+            KnownCategoryIds.Add(CategoryId);
+            bDiscoveredNewCategory = true;
+        }
+    }
+
+    // Rebuild on first discovery so every named preset immediately becomes a
+    // real native section before SDetailsView::RebuildSectionSelector runs.
+    if (bDiscoveredNewCategory && !PresetsById.IsEmpty())
+    {
+        RebuildAllNativeSections();
+    }
+}
+
+void FPruneState::RemoveAllNativeSections()
+{
+    if (!FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
+    {
+        return;
+    }
+
+    FPropertyEditorModule& PropertyEditor =
+        FModuleManager::GetModuleChecked<FPropertyEditorModule>(
+            TEXT("PropertyEditor"));
+
+    for (const TPair<FString, FPresetData>& Entry : PresetsById)
+    {
+        PropertyEditor.RemoveSection(
+            AActor::StaticClass()->GetFName(),
+            MakeSectionName(Entry.Key));
+    }
+}
+
 void FPruneState::LogCurrentCategories(
     const TSharedRef<FPruneLayoutContext>& Context) const
 {
-    Context->LogCurrentCategories(*this);
+    Context->LogCurrentCategories();
 }
 
-bool FPruneState::IsPersistentSelectionKey(const FString& SelectionKey)
+FName FPruneState::MakeSectionName(const FString& PresetId)
 {
-    return !SelectionKey.IsEmpty()
-        && !SelectionKey.StartsWith(TEXT("Mixed:"));
+    return FName(*FString::Printf(TEXT("Prune_%s"), *PresetId));
 }
 
 void FPruneState::CompactContexts()
@@ -576,7 +408,83 @@ void FPruneState::CompactContexts()
         });
 }
 
-void FPruneState::ApplySelectionStateToLiveContexts(const FString& SelectionKey)
+void FPruneState::RebuildAllNativeSections()
+{
+    if (!FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
+    {
+        return;
+    }
+
+    TArray<FString> OrderedPresetIds;
+    PresetsById.GenerateKeyArray(OrderedPresetIds);
+    OrderedPresetIds.Sort(
+        [this](const FString& A, const FString& B)
+        {
+            const FPresetData* PresetA = PresetsById.Find(A);
+            const FPresetData* PresetB = PresetsById.Find(B);
+
+            if (PresetA == nullptr || PresetB == nullptr)
+            {
+                return A < B;
+            }
+
+            if (PresetA->Name != PresetB->Name)
+            {
+                return PresetA->Name < PresetB->Name;
+            }
+
+            return A < B;
+        });
+
+    int32 Order = PruneStatePrivate::FirstPruneSectionOrder;
+    for (const FString& PresetId : OrderedPresetIds)
+    {
+        if (const FPresetData* Preset = PresetsById.Find(PresetId))
+        {
+            RebuildNativeSection(*Preset, Order++);
+        }
+    }
+}
+
+void FPruneState::RebuildNativeSection(
+    const FPresetData& Preset,
+    int32 Order)
+{
+    FPropertyEditorModule& PropertyEditor =
+        FModuleManager::LoadModuleChecked<FPropertyEditorModule>(
+            TEXT("PropertyEditor"));
+
+    const FName ActorClassName = AActor::StaticClass()->GetFName();
+    const FName SectionName = MakeSectionName(Preset.Id);
+
+    // Recreate instead of FindOrCreate-in-place so a rename immediately updates
+    // the display label and order as well as category membership.
+    PropertyEditor.RemoveSection(ActorClassName, SectionName);
+
+    TSharedRef<FPropertySection> Section =
+        PropertyEditor.FindOrCreateSection(
+            ActorClassName,
+            SectionName,
+            FText::FromString(Preset.Name),
+            Order);
+
+    TArray<FName> SortedCategoryIds = KnownCategoryIds.Array();
+    SortedCategoryIds.Sort(
+        [](const FName& A, const FName& B)
+        {
+            return A.ToString() < B.ToString();
+        });
+
+    for (const FName CategoryId : SortedCategoryIds)
+    {
+        if (!Preset.HiddenCategories.Contains(CategoryId))
+        {
+            Section->AddCategory(CategoryId);
+        }
+    }
+}
+
+void FPruneState::ResetLiveViewsToAll()
 {
     CompactContexts();
 
@@ -584,11 +492,23 @@ void FPruneState::ApplySelectionStateToLiveContexts(const FString& SelectionKey)
     {
         if (const TSharedPtr<FPruneLayoutContext> Context = WeakContext.Pin())
         {
-            if (Context->GetSelectionKey() == SelectionKey)
+            if (const TSharedPtr<const IDetailsView> ConstDetailsView =
+                Context->GetDetailsView())
             {
-                Context->ApplyHiddenState(*this);
+                IDetailsView* DetailsView =
+                    const_cast<IDetailsView*>(ConstDetailsView.Get());
+                DetailsView->ResetToDefaultSection();
             }
         }
+    }
+}
+
+void FPruneState::RefreshDetailsViews()
+{
+    if (FPropertyEditorModule* PropertyEditor =
+        FModuleManager::GetModulePtr<FPropertyEditorModule>(TEXT("PropertyEditor")))
+    {
+        PropertyEditor->NotifyCustomizationModuleChanged();
     }
 }
 
@@ -614,10 +534,12 @@ void FPruneState::LoadPersistentState()
             continue;
         }
 
-        const FString Section = PruneStatePrivate::MakePresetSection(PresetId);
+        const FString SectionName =
+            PruneStatePrivate::MakePresetSection(PresetId);
+
         FString Name;
         GConfig->GetString(
-            *Section,
+            *SectionName,
             PruneStatePrivate::NameKey,
             Name,
             GEditorPerProjectIni);
@@ -628,77 +550,21 @@ void FPruneState::LoadPersistentState()
             continue;
         }
 
-        TArray<FString> HiddenStrings;
+        TArray<FString> HiddenCategoryStrings;
         GConfig->GetArray(
-            *Section,
+            *SectionName,
             PruneStatePrivate::HiddenCategoriesKey,
-            HiddenStrings,
+            HiddenCategoryStrings,
             GEditorPerProjectIni);
 
         FPresetData Preset;
         Preset.Id = PresetId;
         Preset.Name = Name;
         Preset.HiddenCategories =
-            PruneStatePrivate::StringsToNames(HiddenStrings);
+            PruneStatePrivate::StringsToNames(HiddenCategoryStrings);
 
-        PresetsById.Add(PresetId, MoveTemp(Preset));
+        PresetsById.Add(Preset.Id, MoveTemp(Preset));
     }
-
-    TArray<FString> SelectionKeys;
-    GConfig->GetArray(
-        PruneStatePrivate::RootSection,
-        PruneStatePrivate::SelectionKeysKey,
-        SelectionKeys,
-        GEditorPerProjectIni);
-
-    for (int32 Index = 0; Index < SelectionKeys.Num(); ++Index)
-    {
-        const FString SelectionKey = SelectionKeys[Index].TrimStartAndEnd();
-        if (!IsPersistentSelectionKey(SelectionKey))
-        {
-            continue;
-        }
-
-        const FString Section = PruneStatePrivate::MakeSelectionSection(Index);
-
-        TArray<FString> HiddenStrings;
-        GConfig->GetArray(
-            *Section,
-            PruneStatePrivate::HiddenCategoriesKey,
-            HiddenStrings,
-            GEditorPerProjectIni);
-
-        FString ActivePresetId;
-        GConfig->GetString(
-            *Section,
-            PruneStatePrivate::ActivePresetIdKey,
-            ActivePresetId,
-            GEditorPerProjectIni);
-
-        ActivePresetId = ActivePresetId.TrimStartAndEnd();
-        if (!ActivePresetId.IsEmpty() && !PresetsById.Contains(ActivePresetId))
-        {
-            ActivePresetId.Reset();
-        }
-
-        FSelectionState Selection;
-        Selection.HiddenCategories =
-            PruneStatePrivate::StringsToNames(HiddenStrings);
-        Selection.ActivePresetId = ActivePresetId;
-
-        if (!Selection.HiddenCategories.IsEmpty()
-            || !Selection.ActivePresetId.IsEmpty())
-        {
-            SelectionStates.Add(SelectionKey, MoveTemp(Selection));
-        }
-    }
-
-    UE_LOG(
-        LogPrune,
-        Log,
-        TEXT("Prune loaded %d preset(s) and %d persistent class state(s)."),
-        PresetsById.Num(),
-        SelectionStates.Num());
 }
 
 void FPruneState::SavePersistentState() const
@@ -709,26 +575,8 @@ void FPruneState::SavePersistentState() const
     }
 
     TArray<FString> PresetIds;
-    PresetIds.Reserve(PresetsById.Num());
-
-    for (const TPair<FString, FPresetData>& Entry : PresetsById)
-    {
-        PresetIds.Add(Entry.Key);
-    }
-
-    PresetIds.Sort(
-        [this](const FString& A, const FString& B)
-        {
-            const FPresetData* PresetA = PresetsById.Find(A);
-            const FPresetData* PresetB = PresetsById.Find(B);
-
-            if (PresetA == nullptr || PresetB == nullptr)
-            {
-                return A < B;
-            }
-
-            return PresetA->Name < PresetB->Name;
-        });
+    PresetsById.GenerateKeyArray(PresetIds);
+    PresetIds.Sort();
 
     GConfig->SetArray(
         PruneStatePrivate::RootSection,
@@ -736,72 +584,24 @@ void FPruneState::SavePersistentState() const
         PresetIds,
         GEditorPerProjectIni);
 
-    for (const FString& PresetId : PresetIds)
+    for (const TPair<FString, FPresetData>& Entry : PresetsById)
     {
-        const FPresetData* Preset = PresetsById.Find(PresetId);
-        if (Preset == nullptr)
-        {
-            continue;
-        }
+        const FString SectionName =
+            PruneStatePrivate::MakePresetSection(Entry.Key);
 
-        const FString Section = PruneStatePrivate::MakePresetSection(PresetId);
         GConfig->SetString(
-            *Section,
+            *SectionName,
             PruneStatePrivate::NameKey,
-            *Preset->Name,
+            *Entry.Value.Name,
             GEditorPerProjectIni);
 
-        const TArray<FString> HiddenStrings =
-            PruneStatePrivate::NamesToStrings(Preset->HiddenCategories);
-        GConfig->SetArray(
-            *Section,
-            PruneStatePrivate::HiddenCategoriesKey,
-            HiddenStrings,
-            GEditorPerProjectIni);
-    }
-
-    TArray<FString> SelectionKeys;
-    for (const TPair<FString, FSelectionState>& Entry : SelectionStates)
-    {
-        if (IsPersistentSelectionKey(Entry.Key)
-            && (!Entry.Value.HiddenCategories.IsEmpty()
-                || !Entry.Value.ActivePresetId.IsEmpty()))
-        {
-            SelectionKeys.Add(Entry.Key);
-        }
-    }
-
-    SelectionKeys.Sort();
-
-    GConfig->SetArray(
-        PruneStatePrivate::RootSection,
-        PruneStatePrivate::SelectionKeysKey,
-        SelectionKeys,
-        GEditorPerProjectIni);
-
-    for (int32 Index = 0; Index < SelectionKeys.Num(); ++Index)
-    {
-        const FString& SelectionKey = SelectionKeys[Index];
-        const FSelectionState* Selection = SelectionStates.Find(SelectionKey);
-        if (Selection == nullptr)
-        {
-            continue;
-        }
-
-        const FString Section = PruneStatePrivate::MakeSelectionSection(Index);
-        const TArray<FString> HiddenStrings =
-            PruneStatePrivate::NamesToStrings(Selection->HiddenCategories);
+        const TArray<FString> HiddenCategoryStrings =
+            PruneStatePrivate::NamesToStrings(Entry.Value.HiddenCategories);
 
         GConfig->SetArray(
-            *Section,
+            *SectionName,
             PruneStatePrivate::HiddenCategoriesKey,
-            HiddenStrings,
-            GEditorPerProjectIni);
-
-        GConfig->SetString(
-            *Section,
-            PruneStatePrivate::ActivePresetIdKey,
-            *Selection->ActivePresetId,
+            HiddenCategoryStrings,
             GEditorPerProjectIni);
     }
 

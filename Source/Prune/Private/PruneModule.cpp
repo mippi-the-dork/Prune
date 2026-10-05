@@ -70,6 +70,12 @@ void FPruneModule::ShutdownModule()
         ActorDetailsExtensionHandle.Reset();
     }
 
+    if (State.IsValid())
+    {
+        State->RemoveAllNativeSections();
+    }
+    State.Reset();
+
     if (!IsEngineExitRequested())
     {
         if (FPropertyEditorModule* PropertyEditor =
@@ -79,8 +85,6 @@ void FPruneModule::ShutdownModule()
             PropertyEditor->NotifyCustomizationModuleChanged();
         }
     }
-
-    State.Reset();
 }
 
 IMPLEMENT_MODULE(FPruneModule, Prune)

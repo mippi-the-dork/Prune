@@ -1,144 +1,126 @@
-# Prune 0.3.0
+# Prune 0.4.1
 
-Prune is an Unreal Engine editor plugin for hiding whole categories in the standard Level Editor Actor Details panel.
+Prune is an Unreal Engine editor plugin that adds editable category presets to the standard Level Editor Actor Details panel.
 
-0.3.0 adds persistent per-class state and reusable named presets on top of the category discovery, plugin compatibility, duplicate-label grouping, and native-order preservation validated in 0.1.x and 0.2.0.
+0.4.1 moves Prune onto Unreal's native **Property Section** system. Prune presets now appear in the same filter row as Unreal's built-in **General**, **Actor**, **LOD**, **Physics**, **Rendering**, and other section buttons.
 
-## Core Workflow
+## Native Preset Row
 
-For an Actor selected in the Level Editor, Prune adds a **Prune** category with two controls:
+Prune no longer adds a collapsible **Prune** category to the Details tree.
 
-- **Preset** - apply or manage reusable category deny-lists,
-- **Categories** - manually show or hide the categories currently available for the selection.
+Instead:
 
-The selection label remains visible beside the controls so it is clear which Actor class is being edited.
+- saved Prune presets appear as normal native section buttons,
+- Unreal's existing **All** button remains the reset/show-everything state,
+- clicking a Prune preset uses Unreal's own section filtering path,
+- Ctrl-click continues to use Unreal's native multi-section behavior,
+- Unreal itself remembers selected sections per Details class/view using its normal Details configuration.
 
-## Persistent Per-Class State
+Prune-created section names are internally unique and are registered on `AActor`, so they are inherited by Actor subclasses.
 
-Exact Actor-class selections now persist for the current user and project through `EditorPerProjectUserSettings.ini`.
+## Prune Management Control
 
-Examples:
+A compact **Prune** menu is injected at the right side of the native section row.
 
-- hide **Physics** and **Rendering** on `StaticMeshActor`,
-- hide **Volumetric Fog** on `ExponentialHeightFog`,
-- restart Unreal,
-- each class restores its own saved Prune state when selected again.
+The menu provides:
 
-Blueprint-generated Actor classes use the generating Blueprint asset path as their identity so normal Blueprint recompilation does not create a new saved state.
+- **New Preset...**
+- **Edit** for each existing Prune preset
+- **Delete** for each existing Prune preset
+- **Log Current Category IDs** for diagnostics
 
-Mixed-class selections remain session-only. They are selection compositions rather than Actor classes, so Prune does not write those temporary combinations to disk.
+The preset editor lists the finished categories available for the current Actor layout. Checked categories are included by the preset. Unchecked categories are hidden by that preset.
 
-## Named Presets
+If Unreal exposes multiple internal category IDs with the same display label, such as `Transform` and `TransformCommon`, Prune presents them as one checkbox while keeping both internal IDs in the saved preset.
 
-Presets are class-agnostic deny-lists of internal category IDs.
+## Class-Agnostic Deny-List Semantics
 
-A preset can hide categories such as:
+Prune still stores presets as class-agnostic deny-lists of internal category IDs.
 
-```text
-Physics
-Navigation
-HLOD
-Collision
-```
+When a category is discovered for the first time, Prune automatically adds it to every native Prune section unless that preset explicitly hides the category ID.
 
-When that preset is applied to a class that does not contain one of those categories, nothing special happens. Unknown or newly introduced categories remain visible by default.
+This preserves the existing Prune rule:
 
-The **Preset** menu contains:
+> Unknown or newly introduced categories default to visible.
 
-- **All Categories** - clear the saved filter for the current selection,
-- every saved named preset,
-- **Save Current as Preset...**,
-- **Delete Active Preset...** when a named preset is active.
+A preset therefore remains useful across unrelated Actor classes without needing every class's category set ahead of time.
 
-Saving a preset records the current hidden internal category IDs and immediately marks that preset as active for the current selection.
+## Plugin Categories
 
-Deleting a preset does not unexpectedly reveal categories. Any class that was using it keeps its current hidden-category rules and becomes **Custom** instead.
+Prune performs finished-category discovery after native and plugin customizations have contributed their categories.
 
-## Preset State
+This includes ordinary plugin-added Details categories such as:
 
-The Preset button displays one of these states:
+- `Surface - Favorites`
+- `Surface - Component Details`
 
-```text
-Preset: All Categories
-Preset: Custom
-Preset: Level Design
-Preset: Lighting
-```
-
-Directly changing a category checkbox while a named preset is active changes that selection to **Custom**. The named preset itself is not edited.
-
-This keeps preset definitions predictable and avoids silently changing every other class that uses the same preset.
-
-## Duplicate Display Names
-
-Unreal can expose multiple internal category IDs with the same visible label. A common example is:
-
-```text
-Transform
-TransformCommon
-```
-
-Both may display as **Transform**.
-
-Prune presents those IDs as one checkbox while keeping the real IDs separate internally for state, presets, logging, and compatibility.
-
-## Finished Category Discovery
-
-Prune attaches through UE 5.8.3's public `OnExtendActorDetails` delegate and uses `SortCategories()` as the completed-category discovery point.
-
-This allows Prune to see categories contributed later by other Details customizations, including plugin-added categories such as:
-
-- `Surface - Favorites`,
-- `Surface - Component Details`.
-
-Prune's own internal category ID, `PruneControl`, is explicitly excluded and can never appear as a Prune checkbox.
+Those categories can be included or excluded by a Prune preset just like native Unreal categories.
 
 ## Native Category Order Preservation
 
-UE 5.8 changes category grouping when any `SortCategories()` callback exists. Prune compensates for that behavior before reading the completed category map so simply enabling Prune does not interleave advanced-only categories into Unreal's normal category block.
+Prune still uses `SortCategories()` as the public finished-category discovery point.
 
-Interactive filtering uses `IDetailCategoryBuilder::SetCategoryVisibility()` rather than rebuilding the Details layout. Hiding and restoring categories therefore preserves the established category order, including categories positioned by other plugins.
+UE 5.8 changes category grouping whenever a sort callback exists, so Prune reconstructs Unreal's normal simple/advanced-only grouping before reading the completed category map. Enabling Prune should therefore not reshuffle the standard Details category order.
 
-## Multiple Details Views
+## Section-Row Integration
 
-Each live Actor Details layout gets its own category-builder context while saved state is keyed by Actor class.
+UE 5.8 does not expose a public extension slot for the right side of the section-selector row.
 
-This means:
+Prune uses a narrow UE 5.8-specific Slate bridge:
 
-- two live Details views showing the same Actor class share that class's Prune state,
-- a locked Details view showing another class keeps its own state,
-- destroyed or rebuilt Details layouts do not leave permanent raw category-builder pointers in Prune state.
+- the standard Details view tags its native section `SWrapBox` as `SectionView`,
+- `IDetailsView` is itself a Slate widget,
+- Prune finds that tagged row after Unreal rebuilds it,
+- Prune appends one management widget to the row,
+- no engine source files are modified or replaced.
+
+The native preset buttons themselves use only public `FPropertyEditorModule` / `FPropertySection` APIs.
+
+## Persistence
+
+Named Prune preset definitions persist per user/project through `EditorPerProjectUserSettings.ini`.
+
+Existing 0.3.0 named presets use the same saved preset format and are loaded by 0.4.1.
+
+The old 0.3.0 per-class **Custom** hidden-category state is no longer the active interaction model. Native Details sections now own the active filter selection.
 
 ## Target
 
 - Unreal Engine 5.8.0 - 5.8.3
 - Windows 64-bit
 - Editor Only
-- No Engine source modifications
+- No engine source modifications
 - Standalone plugin
 
 ## Current Limitations
 
 - Level Editor instance Actor Details only.
-- Mixed-class selection state is session-only.
-- No preset rename or full preset editor yet.
-- No Project Settings UI yet.
-- No Component Details preset family.
-- No Class Defaults integration.
-- No native filter-row injection yet.
-- The Prune control still lives in its own Details category, so Unreal's native General/Actor/LOD/etc. filters can temporarily hide the Prune row itself.
+- Preset editing lists categories available on the currently viewed Actor layout. Hidden IDs from other Actor classes are preserved when editing an existing preset.
+- A preset that excludes every category available on a particular Actor may not produce a native section button for that Actor because Unreal only displays sections that map to at least one populated category.
+- Deleting a preset that is selected in a Details view resets currently live views during refresh, but an unopened class can still have Unreal's own saved section selection pointing at the deleted section until the user selects **All**. This is an Unreal section-selection persistence edge case to harden in a later pass.
+- The right-side management control depends on UE 5.8's `SectionView` Slate tag and section-row structure. It should be regression-tested on every supported engine update.
+- No Component Details preset family yet.
+- No Class Defaults integration yet.
 
-## 0.3.0 Test Focus
+## 0.4.1 Test Focus
 
-The main validation targets are:
+Primary validation targets:
 
-- per-class Custom state survives an editor restart,
-- named presets survive an editor restart,
-- a named preset can be applied to multiple unrelated Actor classes,
-- unknown categories remain visible when a preset is applied,
-- direct category edits switch a named preset to Custom without changing the preset,
-- deleting a preset preserves current visibility and converts affected classes to Custom,
-- Blueprint recompilation keeps persistent class identity,
-- mixed selections remain session-only,
-- multiple Details views continue to synchronize correctly,
-- Surface categories and native category order remain intact.
+- Prune's old Details category is gone,
+- the **Prune** management control appears on the right side of the native section row,
+- creating a preset adds a native preset button before **All**,
+- clicking a Prune preset filters through Unreal's native section system,
+- **All** restores the complete Details view,
+- editing and renaming a preset updates the same native section button,
+- deleting a preset removes its button,
+- preset definitions survive an editor restart,
+- new category IDs default visible unless explicitly hidden by the preset,
+- duplicate visible category names remain grouped in the editor,
+- Surface categories remain available to presets,
+- native category order remains unchanged,
+- multiple Details panels each receive one Prune management control.
+
+### 0.4.1 prototype fix
+
+- Fixed a layout-context lifetime regression introduced when the old Prune Details category was removed.
+- Finished-category discovery, native-order restoration, native preset-section syncing, and the section-row Prune management control now remain alive for the full lifetime of each Details layout.
