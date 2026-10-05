@@ -26,6 +26,106 @@ namespace PruneDetailsCustomizationPrivate
 {
     static const FName PruneControlCategoryName(TEXT("PruneControl"));
 
+    /**
+     * Reproduce Unreal's standard no-SortCategories ordering before Prune
+     * reads the finished category map.
+     *
+     * UE 5.8 normally sorts simple categories and advanced-only categories
+     * separately, then appends the advanced-only block. Merely registering a
+     * SortCategories callback switches the engine to a single combined sort.
+     * Prune needs the callback for finished-category discovery, so restore the
+     * standard grouping here using only public IDetailCategoryBuilder APIs.
+     *
+     * A category is considered advanced-only when it exposes no simple default
+     * properties and at least one advanced default property. Categories made
+     * entirely from custom rows/builders are treated as simple. That matches
+     * Unreal's built-in Actor Details categories used by the prototype and
+     * keeps custom plugin categories such as Surface in the normal block.
+     */
+    static void RestoreStandardCategoryGrouping(
+        const TMap<FName, IDetailCategoryBuilder*>& Categories)
+    {
+        struct FCategoryOrderEntry
+        {
+            IDetailCategoryBuilder* Category = nullptr;
+            int32 OriginalSortOrder = 0;
+            FName Id = NAME_None;
+        };
+
+        TArray<FCategoryOrderEntry> SimpleCategories;
+        TArray<FCategoryOrderEntry> AdvancedOnlyCategories;
+
+        SimpleCategories.Reserve(Categories.Num());
+        AdvancedOnlyCategories.Reserve(Categories.Num());
+
+        for (const TPair<FName, IDetailCategoryBuilder*>& Entry : Categories)
+        {
+            IDetailCategoryBuilder* Category = Entry.Value;
+
+            if (Category == nullptr)
+            {
+                continue;
+            }
+
+            TArray<TSharedRef<IPropertyHandle>> SimpleProperties;
+            TArray<TSharedRef<IPropertyHandle>> AdvancedProperties;
+
+            Category->GetDefaultProperties(
+                SimpleProperties,
+                true,
+                false);
+
+            Category->GetDefaultProperties(
+                AdvancedProperties,
+                false,
+                true);
+
+            FCategoryOrderEntry OrderEntry;
+            OrderEntry.Category = Category;
+            OrderEntry.OriginalSortOrder = Category->GetSortOrder();
+            OrderEntry.Id = Entry.Key;
+
+            const bool bAdvancedOnly =
+                SimpleProperties.IsEmpty()
+                && !AdvancedProperties.IsEmpty();
+
+            if (bAdvancedOnly)
+            {
+                AdvancedOnlyCategories.Add(OrderEntry);
+            }
+            else
+            {
+                SimpleCategories.Add(OrderEntry);
+            }
+        }
+
+        const auto SortByOriginalOrder =
+            [](const FCategoryOrderEntry& A, const FCategoryOrderEntry& B)
+            {
+                if (A.OriginalSortOrder != B.OriginalSortOrder)
+                {
+                    return A.OriginalSortOrder < B.OriginalSortOrder;
+                }
+
+                return A.Id.ToString() < B.Id.ToString();
+            };
+
+        SimpleCategories.Sort(SortByOriginalOrder);
+        AdvancedOnlyCategories.Sort(SortByOriginalOrder);
+
+        int32 NewSortOrder = 0;
+
+        for (FCategoryOrderEntry& Entry : SimpleCategories)
+        {
+            Entry.Category->SetSortOrder(NewSortOrder++);
+        }
+
+        for (FCategoryOrderEntry& Entry : AdvancedOnlyCategories)
+        {
+            Entry.Category->SetSortOrder(NewSortOrder++);
+        }
+    }
+
     static TSharedRef<SWidget> BuildCategoryMenu(
         const TWeakPtr<FPruneState>& WeakState,
         const TWeakPtr<FPruneLayoutContext>& WeakLayoutContext)
@@ -224,7 +324,9 @@ void FPruneDetailsCustomization::ExtendActorDetails(
     // IMPORTANT: SortCategories callbacks execute after all native/default/
     // plugin categories have been generated. This gives Prune the final public
     // category map, including categories added later by plugins such as Surface.
-    // Prune does not alter sort order in this callback.
+    // UE 5.8 changes its native category grouping whenever such a callback is
+    // present, so Prune also restores the normal simple/advanced-only grouping
+    // before reading the completed category map.
     const TWeakPtr<FPruneState> WeakState = State;
     const TWeakPtr<FPruneLayoutContext> WeakLayoutContext = LayoutContext;
     const TWeakPtr<IPropertyUtilities> WeakUtilities =
@@ -242,6 +344,13 @@ void FPruneDetailsCustomization::ExtendActorDetails(
             {
                 return;
             }
+
+            // Registering any SortCategories callback changes UE 5.8 from
+            // its normal two-block ordering (simple, then advanced-only) to a
+            // combined sort. Restore that native grouping before discovery so
+            // Prune's presence does not reshuffle ordinary Details categories.
+            PruneDetailsCustomizationPrivate::RestoreStandardCategoryGrouping(
+                Categories);
 
             LiveContext->UpdateFromFinalCategories(
                 Categories,

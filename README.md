@@ -1,4 +1,4 @@
-# Prune 0.1.6 Prototype
+# Prune 0.1.7 Prototype
 
 Prune is an Unreal Engine editor plugin for hiding whole categories in the standard Level Editor Actor Details panel.
 
@@ -100,3 +100,12 @@ The menu also contains:
 9. Confirm every category returns to its original Details-panel position.
 10. Hide and restore both Surface categories.
 11. Use **Show All** and confirm ordering remains unchanged.
+
+## 0.1.7 Prototype Update
+
+- Preserves Unreal Engine 5.8's standard category grouping while Prune uses the late `SortCategories` discovery callback.
+- Restores the native simple-category block followed by the advanced-only block before final category discovery.
+- Keeps finished-layout discovery, plugin-added categories, dynamic visibility, and in-place restoration from 0.1.6.
+- Still session-only. Restarting the editor clears Prune's hidden-category deny-list.
+
+Technical note: UE 5.8 switches to one combined category sort whenever any `SortCategories` callback exists. Prune now compensates for that behavior using public category APIs so simply enabling Prune should not interleave advanced-only categories into the normal category block. Categories made entirely from custom rows are treated as normal/simple categories.
