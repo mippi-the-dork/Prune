@@ -55,6 +55,27 @@ void FPruneModule::StartupModule()
 
     PropertyEditor.NotifyCustomizationModuleChanged();
 
+    // SDetailsView rebuilds its native section SWrapBox independently of the
+    // Actor detail layout. Keep one lightweight guard running so Prune's
+    // management control is restored after any native section-row rebuild.
+    // The scan is limited to live Actor Details contexts and is a no-op while
+    // the control is already present.
+    const TWeakPtr<FPruneState> WeakState = State;
+    ManagementUiTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+        FTickerDelegate::CreateLambda(
+            [WeakState](float)
+            {
+                if (const TSharedPtr<FPruneState> LiveState = WeakState.Pin())
+                {
+                    FPruneDetailsCustomization::EnsureManagementButtons(
+                        LiveState.ToSharedRef());
+                    return true;
+                }
+
+                return false;
+            }),
+        0.25f);
+
     UE_LOG(
         LogPruneModule,
         Log,
@@ -63,6 +84,12 @@ void FPruneModule::StartupModule()
 
 void FPruneModule::ShutdownModule()
 {
+    if (ManagementUiTickerHandle.IsValid())
+    {
+        FTSTicker::GetCoreTicker().RemoveTicker(ManagementUiTickerHandle);
+        ManagementUiTickerHandle.Reset();
+    }
+
     if (ActorDetailsExtensionHandle.IsValid()
         && FModuleManager::Get().IsModuleLoaded(TEXT("DetailCustomizations")))
     {

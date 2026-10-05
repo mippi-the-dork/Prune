@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "Containers/Ticker.h"
 #include "Delegates/Delegate.h"
 #include "Modules/ModuleInterface.h"
 #include "Templates/SharedPointer.h"
@@ -27,4 +28,5 @@ public:
 private:
     TSharedPtr<FPruneState> State;
     FDelegateHandle ActorDetailsExtensionHandle;
+    FTSTicker::FDelegateHandle ManagementUiTickerHandle;
 };

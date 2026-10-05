@@ -1,8 +1,8 @@
-# Prune 0.4.1
+# Prune 0.4.3
 
 Prune is an Unreal Engine editor plugin that adds editable category presets to the standard Level Editor Actor Details panel.
 
-0.4.1 moves Prune onto Unreal's native **Property Section** system. Prune presets now appear in the same filter row as Unreal's built-in **General**, **Actor**, **LOD**, **Physics**, **Rendering**, and other section buttons.
+0.4.3 moves Prune onto Unreal's native **Property Section** system. Prune presets now appear in the same filter row as Unreal's built-in **General**, **Actor**, **LOD**, **Physics**, **Rendering**, and other section buttons.
 
 ## Native Preset Row
 
@@ -80,7 +80,7 @@ The native preset buttons themselves use only public `FPropertyEditorModule` / `
 
 Named Prune preset definitions persist per user/project through `EditorPerProjectUserSettings.ini`.
 
-Existing 0.3.0 named presets use the same saved preset format and are loaded by 0.4.1.
+Existing 0.3.0 named presets use the same saved preset format and are loaded by 0.4.3.
 
 The old 0.3.0 per-class **Custom** hidden-category state is no longer the active interaction model. Native Details sections now own the active filter selection.
 
@@ -102,7 +102,7 @@ The old 0.3.0 per-class **Custom** hidden-category state is no longer the active
 - No Component Details preset family yet.
 - No Class Defaults integration yet.
 
-## 0.4.1 Test Focus
+## 0.4.2 Test Focus
 
 Primary validation targets:
 
@@ -120,7 +120,24 @@ Primary validation targets:
 - native category order remains unchanged,
 - multiple Details panels each receive one Prune management control.
 
-### 0.4.1 prototype fix
+### 0.4.2 prototype fix
 
 - Fixed a layout-context lifetime regression introduced when the old Prune Details category was removed.
 - Finished-category discovery, native-order restoration, native preset-section syncing, and the section-row Prune management control now remain alive for the full lifetime of each Details layout.
+
+
+## 0.4.2 UI Injection Hardening
+
+- Keeps the Prune management control present even when Unreal rebuilds the native section row.
+- Retries the management-control insertion from a lightweight live-view ticker.
+- Uses the UE 5.8 `SectionView` metadata tag first, with a structural SWrapBox fallback.
+- Preserves the native category-order restoration from 0.4.1.
+
+
+## 0.4.3 Section Row Wrapper Fix
+
+- Keeps the validated 0.4.1 native category-order restoration.
+- Stops inserting the Prune manager directly into Unreal's `SWrapBox` section selector.
+- Wraps the existing native `SectionView` in a horizontal row instead, leaving Unreal's section buttons on the left and reserving a stable auto-width management area on the right.
+- Unreal may continue calling `RebuildSectionSelector()` and clearing/repopulating its own section buttons without deleting the Prune manager.
+- The periodic UI guard remains as a recovery path for newly reconstructed Details views.

@@ -33,6 +33,7 @@ namespace PruneDetailsCustomizationPrivate
 {
     static const FName SectionViewTag(TEXT("SectionView"));
     static const FName PruneManagerTag(TEXT("Prune.Manager"));
+    static const FName PruneSectionRowWrapperTag(TEXT("Prune.SectionRowWrapper"));
 
     /**
      * UE 5.8 normally sorts simple categories and advanced-only categories
@@ -570,14 +571,53 @@ namespace PruneDetailsCustomizationPrivate
             ];
     }
 
-    static SWrapBox* FindSectionSelectorRecursive(SWidget& Widget)
+    static bool WidgetHasTag(const SWidget& Widget, FName Tag)
     {
         const TSharedPtr<FTagMetaData> TagMeta =
             Widget.GetMetaData<FTagMetaData>();
 
-        if (TagMeta.IsValid() && TagMeta->Tag == SectionViewTag)
+        return TagMeta.IsValid() && TagMeta->Tag == Tag;
+    }
+
+    static int32 CountDescendantsOfType(
+        SWidget& Widget,
+        FName WidgetType,
+        int32 RemainingDepth)
+    {
+        if (RemainingDepth < 0)
         {
-            return static_cast<SWrapBox*>(&Widget);
+            return 0;
+        }
+
+        int32 Count = Widget.GetType() == WidgetType ? 1 : 0;
+
+        FChildren* Children = Widget.GetChildren();
+        if (Children == nullptr)
+        {
+            return Count;
+        }
+
+        for (int32 Index = 0; Index < Children->Num(); ++Index)
+        {
+            Count += CountDescendantsOfType(
+                Children->GetChildAt(Index).Get(),
+                WidgetType,
+                RemainingDepth - 1);
+        }
+
+        return Count;
+    }
+
+    static SWrapBox* FindSectionSelectorRecursive(SWidget& Widget)
+    {
+        // Primary path: UE 5.8 explicitly tags the section selector SWrapBox
+        // with FTagMetaData("SectionView").
+        if (WidgetHasTag(Widget, SectionViewTag))
+        {
+            if (Widget.GetType() == FName(TEXT("SWrapBox")))
+            {
+                return static_cast<SWrapBox*>(&Widget);
+            }
         }
 
         FChildren* Children = Widget.GetChildren();
@@ -595,12 +635,33 @@ namespace PruneDetailsCustomizationPrivate
             }
         }
 
+        // Fallback for cases where another Slate wrapper strips or replaces
+        // metadata. The native section row is an SWrapBox whose direct slot
+        // contents contain multiple section checkboxes.
+        if (Widget.GetType() == FName(TEXT("SWrapBox")))
+        {
+            const int32 CheckBoxCount = CountDescendantsOfType(
+                Widget,
+                FName(TEXT("SCheckBox")),
+                3);
+
+            if (CheckBoxCount >= 2)
+            {
+                return static_cast<SWrapBox*>(&Widget);
+            }
+        }
+
         return nullptr;
     }
 
-    static bool HasPruneManager(SWrapBox& SectionSelector)
+    static bool HasWidgetTagRecursive(SWidget& Widget, FName Tag)
     {
-        FChildren* Children = SectionSelector.GetChildren();
+        if (WidgetHasTag(Widget, Tag))
+        {
+            return true;
+        }
+
+        FChildren* Children = Widget.GetChildren();
         if (Children == nullptr)
         {
             return false;
@@ -608,11 +669,7 @@ namespace PruneDetailsCustomizationPrivate
 
         for (int32 Index = 0; Index < Children->Num(); ++Index)
         {
-            const TSharedRef<SWidget> Child = Children->GetChildAt(Index);
-            const TSharedPtr<FTagMetaData> TagMeta =
-                Child->GetMetaData<FTagMetaData>();
-
-            if (TagMeta.IsValid() && TagMeta->Tag == PruneManagerTag)
+            if (HasWidgetTagRecursive(Children->GetChildAt(Index).Get(), Tag))
             {
                 return true;
             }
@@ -621,7 +678,12 @@ namespace PruneDetailsCustomizationPrivate
         return false;
     }
 
-    static void InjectManagementButton(
+    static bool HasPruneManager(SWrapBox& SectionSelector)
+    {
+        return HasWidgetTagRecursive(SectionSelector, PruneManagerTag);
+    }
+
+    static bool InjectManagementButton(
         const TWeakPtr<FPruneState>& WeakState,
         const TWeakPtr<FPruneLayoutContext>& WeakLayoutContext)
     {
@@ -629,37 +691,111 @@ namespace PruneDetailsCustomizationPrivate
         const TSharedPtr<FPruneLayoutContext> Context = WeakLayoutContext.Pin();
         if (!State.IsValid() || !Context.IsValid())
         {
-            return;
+            return false;
         }
 
         const TSharedPtr<const IDetailsView> DetailsView =
             Context->GetDetailsView();
         if (!DetailsView.IsValid())
         {
-            return;
+            return false;
         }
 
-        // IDetailsView is itself an SCompoundWidget. UE 5.8 tags the native
-        // section SWrapBox with FTagMetaData("SectionView"), so Prune can find
-        // that exact row without replacing the Details view or touching engine
-        // source. This is intentionally a small 5.8-specific Slate bridge.
+        // IDetailsView is itself a Slate widget. UE 5.8 tags the native section
+        // SWrapBox with FTagMetaData("SectionView"). Prune finds that exact row
+        // without replacing the Details view or modifying engine source.
         IDetailsView* MutableDetailsView =
             const_cast<IDetailsView*>(DetailsView.Get());
+
+        // If the manager is already anywhere in the live Details tree, the
+        // native section row has already been wrapped and there is nothing to
+        // repair. This also keeps the periodic guard effectively free once the
+        // UI is installed.
+        if (HasWidgetTagRecursive(*MutableDetailsView, PruneManagerTag))
+        {
+            return true;
+        }
 
         SWrapBox* SectionSelector =
             FindSectionSelectorRecursive(*MutableDetailsView);
 
-        if (SectionSelector == nullptr || HasPruneManager(*SectionSelector))
+        if (SectionSelector == nullptr)
         {
-            return;
+            return false;
         }
 
-        SectionSelector->AddSlot()
-            .FillEmptySpace(true)
-            .HAlign(HAlign_Right)
+        // Do not add Prune as a child of the SWrapBox itself. RebuildSectionSelector()
+        // clears every child of that box, and a FillEmptySpace slot is also not a
+        // reliable way to reserve a right-aligned management area. Instead, wrap
+        // Unreal's existing SectionView as the left, fill-width child of a new
+        // horizontal row and place Prune in an auto-width slot on the right.
+        //
+        // In UE 5.8 SDetailsView constructs SectionView as the second and final
+        // child of FilterRowVBox, so removing it and appending the replacement row
+        // preserves its original vertical position beneath the search box. Unreal
+        // continues to own and rebuild the original SWrapBox normally.
+        const TSharedPtr<SWidget> ParentWidget = SectionSelector->GetParentWidget();
+        if (!ParentWidget.IsValid() || ParentWidget->GetType() != FName(TEXT("SVerticalBox")))
+        {
+            return false;
+        }
+
+        SVerticalBox* FilterRowVBox = static_cast<SVerticalBox*>(ParentWidget.Get());
+        const TSharedRef<SWidget> SectionSelectorRef = SectionSelector->AsShared();
+
+        if (FilterRowVBox->RemoveSlot(SectionSelectorRef) == INDEX_NONE)
+        {
+            return false;
+        }
+
+        TSharedRef<SHorizontalBox> PruneSectionRow =
+            SNew(SHorizontalBox)
+            .AddMetaData<FTagMetaData>(PruneSectionRowWrapperTag)
+            + SHorizontalBox::Slot()
+            .FillWidth(1.0f)
+            .VAlign(VAlign_Center)
+            [
+                SectionSelectorRef
+            ]
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .VAlign(VAlign_Center)
+            .Padding(8.0f, 0.0f, 0.0f, 0.0f)
             [
                 BuildManagementButton(State.ToSharedRef(), Context.ToSharedRef())
             ];
+
+        FilterRowVBox->AddSlot()
+            .AutoHeight()
+            .Padding(8.0f, 2.0f, 8.0f, 7.0f)
+            [
+                PruneSectionRow
+            ];
+
+        FilterRowVBox->Invalidate(EInvalidateWidgetReason::Layout);
+
+        UE_LOG(
+            LogPruneDetails,
+            Log,
+            TEXT("Prune wrapped the native Details section row and added its management control."));
+
+        return true;
+    }
+
+}
+
+
+void FPruneDetailsCustomization::EnsureManagementButtons(
+    TSharedRef<FPruneState> State)
+{
+    const TWeakPtr<FPruneState> WeakState = State;
+
+    for (const TSharedRef<FPruneLayoutContext>& Context :
+        State->GetLiveLayoutContexts())
+    {
+        PruneDetailsCustomizationPrivate::InjectManagementButton(
+            WeakState,
+            Context);
     }
 }
 

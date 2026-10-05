@@ -98,6 +98,7 @@ public:
     bool DeletePreset(const FString& PresetId);
 
     void RegisterLayoutContext(const TSharedRef<FPruneLayoutContext>& Context);
+    TArray<TSharedRef<FPruneLayoutContext>> GetLiveLayoutContexts();
     void SyncNativeSectionsForContext(
         const TSharedRef<FPruneLayoutContext>& Context);
 

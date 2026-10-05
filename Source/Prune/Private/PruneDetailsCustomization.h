@@ -19,4 +19,7 @@ public:
         TSharedRef<FPruneState> State,
         IDetailLayoutBuilder& DetailBuilder,
         const TArray<TWeakObjectPtr<AActor>>& SelectedActors);
+
+    /** Re-add the management button if Unreal rebuilt the native section row. */
+    static void EnsureManagementButtons(TSharedRef<FPruneState> State);
 };

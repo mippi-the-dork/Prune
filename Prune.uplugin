@@ -1,7 +1,7 @@
 {
     "FileVersion": 3,
-    "Version": 12,
-    "VersionName": "0.4.1",
+    "Version": 10,
+    "VersionName": "0.4.3",
     "FriendlyName": "Prune",
     "Description": "Adds editable native Details section presets to Level Editor Actor Details while preserving native category ordering.",
     "Category": "Editor",

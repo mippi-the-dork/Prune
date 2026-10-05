@@ -347,6 +347,24 @@ void FPruneState::RegisterLayoutContext(
     }
 }
 
+TArray<TSharedRef<FPruneLayoutContext>> FPruneState::GetLiveLayoutContexts()
+{
+    CompactContexts();
+
+    TArray<TSharedRef<FPruneLayoutContext>> Result;
+    Result.Reserve(LayoutContexts.Num());
+
+    for (const TWeakPtr<FPruneLayoutContext>& WeakContext : LayoutContexts)
+    {
+        if (const TSharedPtr<FPruneLayoutContext> Context = WeakContext.Pin())
+        {
+            Result.Add(Context.ToSharedRef());
+        }
+    }
+
+    return Result;
+}
+
 void FPruneState::SyncNativeSectionsForContext(
     const TSharedRef<FPruneLayoutContext>& Context)
 {
