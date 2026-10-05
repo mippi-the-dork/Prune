@@ -1,57 +1,113 @@
-# Prune 0.1.7 Prototype
+# Prune 0.3.0
 
 Prune is an Unreal Engine editor plugin for hiding whole categories in the standard Level Editor Actor Details panel.
 
-This is still a **feasibility prototype**. Presets and persistence are intentionally deferred until category discovery, hiding, restoration, plugin coexistence, and ordering are reliable.
+0.3.0 adds persistent per-class state and reusable named presets on top of the category discovery, plugin compatibility, duplicate-label grouping, and native-order preservation validated in 0.1.x and 0.2.0.
 
-## 0.1.6 Finished-Category Discovery
+## Core Workflow
 
-Prune continues to attach through UE 5.8.3's public `OnExtendActorDetails` delegate. It no longer treats the category set visible at that callback as final.
+For an Actor selected in the Level Editor, Prune adds a **Prune** category with two controls:
 
-Instead, Prune registers a `SortCategories()` callback. Unreal invokes category-sort callbacks after native/default/custom categories have been generated, so Prune receives the complete public category map for that Details layout. This includes categories added later by other customizations, such as Surface's Actor Details sections.
+- **Preset** - apply or manage reusable category deny-lists,
+- **Categories** - manually show or hide the categories currently available for the selection.
+
+The selection label remains visible beside the controls so it is clear which Actor class is being edited.
+
+## Persistent Per-Class State
+
+Exact Actor-class selections now persist for the current user and project through `EditorPerProjectUserSettings.ini`.
+
+Examples:
+
+- hide **Physics** and **Rendering** on `StaticMeshActor`,
+- hide **Volumetric Fog** on `ExponentialHeightFog`,
+- restart Unreal,
+- each class restores its own saved Prune state when selected again.
+
+Blueprint-generated Actor classes use the generating Blueprint asset path as their identity so normal Blueprint recompilation does not create a new saved state.
+
+Mixed-class selections remain session-only. They are selection compositions rather than Actor classes, so Prune does not write those temporary combinations to disk.
+
+## Named Presets
+
+Presets are class-agnostic deny-lists of internal category IDs.
+
+A preset can hide categories such as:
+
+```text
+Physics
+Navigation
+HLOD
+Collision
+```
+
+When that preset is applied to a class that does not contain one of those categories, nothing special happens. Unknown or newly introduced categories remain visible by default.
+
+The **Preset** menu contains:
+
+- **All Categories** - clear the saved filter for the current selection,
+- every saved named preset,
+- **Save Current as Preset...**,
+- **Delete Active Preset...** when a named preset is active.
+
+Saving a preset records the current hidden internal category IDs and immediately marks that preset as active for the current selection.
+
+Deleting a preset does not unexpectedly reveal categories. Any class that was using it keeps its current hidden-category rules and becomes **Custom** instead.
+
+## Preset State
+
+The Preset button displays one of these states:
+
+```text
+Preset: All Categories
+Preset: Custom
+Preset: Level Design
+Preset: Lighting
+```
+
+Directly changing a category checkbox while a named preset is active changes that selection to **Custom**. The named preset itself is not edited.
+
+This keeps preset definitions predictable and avoids silently changing every other class that uses the same preset.
+
+## Duplicate Display Names
+
+Unreal can expose multiple internal category IDs with the same visible label. A common example is:
+
+```text
+Transform
+TransformCommon
+```
+
+Both may display as **Transform**.
+
+Prune presents those IDs as one checkbox while keeping the real IDs separate internally for state, presets, logging, and compatibility.
+
+## Finished Category Discovery
+
+Prune attaches through UE 5.8.3's public `OnExtendActorDetails` delegate and uses `SortCategories()` as the completed-category discovery point.
+
+This allows Prune to see categories contributed later by other Details customizations, including plugin-added categories such as:
+
+- `Surface - Favorites`,
+- `Surface - Component Details`.
 
 Prune's own internal category ID, `PruneControl`, is explicitly excluded and can never appear as a Prune checkbox.
 
-The Prune dropdown is alphabetized by display label. This is independent of the Details panel's visual category ordering; Prune does not modify that ordering.
+## Native Category Order Preservation
 
-## 0.1.6 Dynamic Visibility
+UE 5.8 changes category grouping when any `SortCategories()` callback exists. Prune compensates for that behavior before reading the completed category map so simply enabling Prune does not interleave advanced-only categories into Unreal's normal category block.
 
-Interactive filtering no longer uses:
+Interactive filtering uses `IDetailCategoryBuilder::SetCategoryVisibility()` rather than rebuilding the Details layout. Hiding and restoring categories therefore preserves the established category order, including categories positioned by other plugins.
 
-- `IDetailLayoutBuilder::HideCategory()` for checkbox changes,
-- `IDetailsView::ForceRefresh()`,
-- layout reconstruction to restore a category.
+## Multiple Details Views
 
-Prune now keeps the live `IDetailCategoryBuilder` objects for each active Actor Details layout and calls `SetCategoryVisibility()`.
+Each live Actor Details layout gets its own category-builder context while saved state is keyed by Actor class.
 
-This is important because Unreal's category implementation changes only the visibility flag, reruns the existing filter, and notifies the layout. It does not recreate the category or change its sort order.
+This means:
 
-Expected result:
-
-- hiding a category removes it in place,
-- showing it restores the same category in the same established position,
-- restoring categories in a different order does not reorder the Details panel.
-
-## Plugin-Added Categories
-
-Prune discovers the finished category set after all participating customizations have contributed their categories.
-
-With Surface enabled, the dropdown should now include:
-
-- `Surface - Favorites`
-- `Surface - Component Details`
-
-Those categories are treated like any other Details category and may be hidden or restored.
-
-Prune does not special-case Surface by name. Any plugin category using Unreal's normal `IDetailCategoryBuilder` path should be discoverable through the same finished category map.
-
-## Multiple Details Layouts
-
-The hidden-category deny-list remains shared for the current editor session, but each live Details layout now has its own category-builder context.
-
-Changing a category updates every currently live Actor Details layout that contains that category. When a Details layout is destroyed, its context is released with its Slate control and Prune retains only a weak reference.
-
-This is safer than keeping one global `IDetailsView` or one global set of raw category builders.
+- two live Details views showing the same Actor class share that class's Prune state,
+- a locked Details view showing another class keeps its own state,
+- destroyed or rebuilt Details layouts do not leave permanent raw category-builder pointers in Prune state.
 
 ## Target
 
@@ -61,51 +117,28 @@ This is safer than keeping one global `IDetailsView` or one global set of raw ca
 - No Engine source modifications
 - Standalone plugin
 
-## Current UI
-
-For an Actor selected in the Level Editor, Prune adds a **Prune** category containing a **Categories** dropdown.
-
-Each entry is a category from the completed Actor Details layout:
-
-- checked = visible
-- unchecked = hidden by Prune
-
-The menu also contains:
-
-- **Show All** - clears the session deny-list and restores all currently live categories in place
-- **Log IDs** - prints the completed category set, internal IDs, display labels, and visibility state
-
 ## Current Limitations
 
 - Level Editor instance Actor Details only.
-- Hidden categories are session-only.
-- Hidden state is not per class yet.
-- No named presets yet.
+- Mixed-class selection state is session-only.
+- No preset rename or full preset editor yet.
 - No Project Settings UI yet.
 - No Component Details preset family.
 - No Class Defaults integration.
-- No native filter-row injection.
-- The Prune control still lives in its own temporary Details category.
+- No native filter-row injection yet.
+- The Prune control still lives in its own Details category, so Unreal's native General/Actor/LOD/etc. filters can temporarily hide the Prune row itself.
 
-## First Test
+## 0.3.0 Test Focus
 
-1. Compile and launch UE 5.8.3 with Surface enabled.
-2. Select a StaticMeshActor.
-3. Open **Prune > Categories**.
-4. Confirm **Prune** itself is absent from the list.
-5. Confirm **Surface - Favorites** and **Surface - Component Details** are present.
-6. Hide **Rendering**, then restore it.
-7. Hide **Transform**, then restore it.
-8. Hide several categories, then re-enable them in a different order.
-9. Confirm every category returns to its original Details-panel position.
-10. Hide and restore both Surface categories.
-11. Use **Show All** and confirm ordering remains unchanged.
+The main validation targets are:
 
-## 0.1.7 Prototype Update
-
-- Preserves Unreal Engine 5.8's standard category grouping while Prune uses the late `SortCategories` discovery callback.
-- Restores the native simple-category block followed by the advanced-only block before final category discovery.
-- Keeps finished-layout discovery, plugin-added categories, dynamic visibility, and in-place restoration from 0.1.6.
-- Still session-only. Restarting the editor clears Prune's hidden-category deny-list.
-
-Technical note: UE 5.8 switches to one combined category sort whenever any `SortCategories` callback exists. Prune now compensates for that behavior using public category APIs so simply enabling Prune should not interleave advanced-only categories into the normal category block. Categories made entirely from custom rows are treated as normal/simple categories.
+- per-class Custom state survives an editor restart,
+- named presets survive an editor restart,
+- a named preset can be applied to multiple unrelated Actor classes,
+- unknown categories remain visible when a preset is applied,
+- direct category edits switch a named preset to Custom without changing the preset,
+- deleting a preset preserves current visibility and converts affected classes to Custom,
+- Blueprint recompilation keeps persistent class identity,
+- mixed selections remain session-only,
+- multiple Details views continue to synchronize correctly,
+- Surface categories and native category order remain intact.
