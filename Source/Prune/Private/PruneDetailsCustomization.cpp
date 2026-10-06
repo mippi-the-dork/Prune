@@ -5,16 +5,26 @@
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
 #include "Engine/World.h"
+#include "Brushes/SlateColorBrush.h"
+#include "Brushes/SlateImageBrush.h"
+#include "HAL/FileManager.h"
+#include "Interfaces/IPluginManager.h"
+#include "ISettingsModule.h"
 #include "Framework/Application/SlateApplication.h"
 #include "IDetailsView.h"
 #include "Misc/MessageDialog.h"
+#include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "PruneState.h"
+#include "PruneSettings.h"
 #include "Styling/AppStyle.h"
+#include "Styling/StyleColors.h"
 #include "Types/ISlateMetaData.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SOverlay.h"
@@ -214,6 +224,7 @@ namespace PruneDetailsCustomizationPrivate
     {
         Cancel,
         Save,
+        Duplicate,
         Delete,
         ResetNative
     };
@@ -222,6 +233,7 @@ namespace PruneDetailsCustomizationPrivate
     {
         EFilterEditorAction Action = EFilterEditorAction::Cancel;
         FString Name;
+        FString Description;
         bool bGlobal = false;
         TSet<FName> HiddenCategories;
         TArray<FName> OrderedCategoryIds;
@@ -289,6 +301,93 @@ namespace PruneDetailsCustomizationPrivate
             });
     }
 
+    static const FSlateBrush* GetGlobalScopeIconBrush()
+    {
+        static TSharedPtr<FSlateVectorImageBrush> GlobalScopeIcon;
+
+        if (!GlobalScopeIcon.IsValid())
+        {
+            const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Prune"));
+            if (Plugin.IsValid())
+            {
+                const FString IconPath = FPaths::Combine(
+                    Plugin->GetBaseDir(),
+                    TEXT("Resources"),
+                    TEXT("globe.svg"));
+
+                if (IFileManager::Get().FileExists(*IconPath))
+                {
+                    GlobalScopeIcon = MakeShared<FSlateVectorImageBrush>(
+                        IconPath,
+                        FVector2D(16.0f, 16.0f),
+                        FLinearColor::White);
+                }
+            }
+        }
+
+        return GlobalScopeIcon.IsValid()
+            ? GlobalScopeIcon.Get()
+            : FAppStyle::Get().GetBrush("Icons.Filter");
+    }
+
+    static const FSlateBrush* GetFilterEditIconBrush()
+    {
+        static TSharedPtr<FSlateVectorImageBrush> FilterEditIcon;
+
+        if (!FilterEditIcon.IsValid())
+        {
+            const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Prune"));
+            if (Plugin.IsValid())
+            {
+                const FString IconPath = FPaths::Combine(
+                    Plugin->GetBaseDir(),
+                    TEXT("Resources"),
+                    TEXT("filter-edit.svg"));
+
+                if (IFileManager::Get().FileExists(*IconPath))
+                {
+                    FilterEditIcon = MakeShared<FSlateVectorImageBrush>(
+                        IconPath,
+                        FVector2D(16.0f, 16.0f),
+                        FLinearColor::White);
+                }
+            }
+        }
+
+        return FilterEditIcon.IsValid()
+            ? FilterEditIcon.Get()
+            : FAppStyle::Get().GetBrush("DetailsView.ViewOptions");
+    }
+
+    static const FSlateBrush* GetFilterManagerIconBrush()
+    {
+        static TSharedPtr<FSlateVectorImageBrush> FilterManagerIcon;
+
+        if (!FilterManagerIcon.IsValid())
+        {
+            const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Prune"));
+            if (Plugin.IsValid())
+            {
+                const FString IconPath = FPaths::Combine(
+                    Plugin->GetBaseDir(),
+                    TEXT("Resources"),
+                    TEXT("filter-manager.svg"));
+
+                if (IFileManager::Get().FileExists(*IconPath))
+                {
+                    FilterManagerIcon = MakeShared<FSlateVectorImageBrush>(
+                        IconPath,
+                        FVector2D(16.0f, 16.0f),
+                        FLinearColor::White);
+                }
+            }
+        }
+
+        return FilterManagerIcon.IsValid()
+            ? FilterManagerIcon.Get()
+            : FAppStyle::Get().GetBrush("Icons.Settings");
+    }
+
     static TOptional<FFilterEditorResult> ShowFilterEditor(
         const TSharedRef<FPruneLayoutContext>& LayoutContext,
         const FPruneFilterEditorData& InitialData,
@@ -296,15 +395,23 @@ namespace PruneDetailsCustomizationPrivate
         bool bEditingNative)
     {
         TSharedPtr<SEditableTextBox> NameTextBox;
-        TSharedPtr<SVerticalBox> CategoryList;
+        TSharedPtr<SEditableTextBox> DescriptionTextBox;
+        TSharedPtr<SDragAndDropVerticalBox> CategoryList;
         TArray<FPruneCategoryGroupInfo> WorkingGroups = LayoutContext->GetCategoryGroups();
         TSet<FName> WorkingHiddenCategories = InitialData.HiddenCategories;
+        FString CategorySearchText;
+        TOptional<int32> DraggedGroupIndex;
+        TOptional<int32> DropTargetGroupIndex;
+        TOptional<SDragAndDropVerticalBox::EItemDropZone> DropTargetZone;
+        const UPruneSettings* Settings = UPruneSettings::Get();
         bool bWorkingGlobal = InitialData.bGlobal;
         bool bWorkingCustomOrder = !InitialData.OrderedCategoryIds.IsEmpty();
         EFilterEditorAction Action = EFilterEditorAction::Cancel;
 
         ApplySavedOrderToGroups(WorkingGroups, InitialData.OrderedCategoryIds);
         const TArray<FPruneCategoryGroupInfo> NativeGroups = LayoutContext->GetCategoryGroups();
+
+        static const FSlateColorBrush DragRowBackgroundBrush{ FLinearColor::White };
 
         TFunction<void()> RebuildCategoryList;
         RebuildCategoryList = [&]()
@@ -316,109 +423,208 @@ namespace PruneDetailsCustomizationPrivate
 
             CategoryList->ClearChildren();
 
+            int32 MatchingGroupCount = 0;
             for (int32 Index = 0; Index < WorkingGroups.Num(); ++Index)
             {
                 const FPruneCategoryGroupInfo Group = WorkingGroups[Index];
+                const FString Search = CategorySearchText.TrimStartAndEnd();
+                bool bMatchesSearch = Search.IsEmpty()
+                    || Group.DisplayName.ToString().Contains(Search, ESearchCase::IgnoreCase);
+
+                if (!bMatchesSearch)
+                {
+                    for (const FName CategoryId : Group.Ids)
+                    {
+                        if (CategoryId.ToString().Contains(Search, ESearchCase::IgnoreCase))
+                        {
+                            bMatchesSearch = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!bMatchesSearch)
+                {
+                    continue;
+                }
+
+                ++MatchingGroupCount;
+
                 const TArray<FName> CategoryIds = Group.Ids;
+                const int32 WorkingGroupIndex = Index;
 
                 CategoryList->AddSlot()
                 .AutoHeight()
-                .Padding(2.0f)
+                .Padding(2.0f, 1.0f)
                 [
-                    SNew(SHorizontalBox)
+                    SNew(SOverlay)
 
-                    + SHorizontalBox::Slot()
-                    .FillWidth(1.0f)
-                    .VAlign(VAlign_Center)
+                    + SOverlay::Slot()
                     [
-                        SNew(SCheckBox)
-                        .IsChecked_Lambda(
-                            [&WorkingHiddenCategories, CategoryIds]()
+                        SNew(SBorder)
+                        .BorderImage(&DragRowBackgroundBrush)
+                        .BorderBackgroundColor_Lambda(
+                            [Settings, &DraggedGroupIndex, WorkingGroupIndex]()
                             {
-                                int32 HiddenCount = 0;
-                                for (const FName CategoryId : CategoryIds)
-                                {
-                                    HiddenCount += WorkingHiddenCategories.Contains(CategoryId) ? 1 : 0;
-                                }
-
-                                if (HiddenCount == 0)
-                                {
-                                    return ECheckBoxState::Checked;
-                                }
-                                if (HiddenCount == CategoryIds.Num())
-                                {
-                                    return ECheckBoxState::Unchecked;
-                                }
-                                return ECheckBoxState::Undetermined;
+                                return DraggedGroupIndex.IsSet()
+                                    && DraggedGroupIndex.GetValue() == WorkingGroupIndex
+                                    ? FSlateColor(Settings->ReorderDragColor)
+                                    : FSlateColor(FLinearColor::Transparent);
                             })
-                        .OnCheckStateChanged_Lambda(
-                            [&WorkingHiddenCategories, CategoryIds](ECheckBoxState State)
-                            {
-                                const bool bShow = State == ECheckBoxState::Checked;
-                                for (const FName CategoryId : CategoryIds)
-                                {
-                                    if (bShow)
-                                    {
-                                        WorkingHiddenCategories.Remove(CategoryId);
-                                    }
-                                    else
-                                    {
-                                        WorkingHiddenCategories.Add(CategoryId);
-                                    }
-                                }
-                            })
+                        .Padding(FMargin(4.0f, 2.0f))
                         [
-                            SNew(STextBlock)
-                            .Text(Group.DisplayName)
+                            SNew(SHorizontalBox)
+
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .VAlign(VAlign_Center)
+                            .Padding(2.0f, 0.0f, 7.0f, 0.0f)
+                            [
+                                SNew(STextBlock)
+                                .Text(FText::FromString(TEXT("≡")))
+                                .TextStyle(FAppStyle::Get(), "SmallText")
+                                .ColorAndOpacity_Lambda(
+                                    [Settings, &DraggedGroupIndex, WorkingGroupIndex]()
+                                    {
+                                        return DraggedGroupIndex.IsSet()
+                                            && DraggedGroupIndex.GetValue() == WorkingGroupIndex
+                                            ? FSlateColor(Settings->ReorderDraggedContentColor)
+                                            : FSlateColor::UseForeground();
+                                    })
+                                .ToolTipText_Lambda([&CategorySearchText]()
+                                {
+                                    return CategorySearchText.TrimStartAndEnd().IsEmpty()
+                                        ? LOCTEXT("DragCategoryTooltip", "Drag to reorder this category.")
+                                        : LOCTEXT("DragCategorySearchTooltip", "Clear the category search before reordering.");
+                                })
+                            ]
+
+                            + SHorizontalBox::Slot()
+                            .FillWidth(1.0f)
+                            .VAlign(VAlign_Center)
+                            [
+                                SNew(SCheckBox)
+                                .ForegroundColor_Lambda(
+                                    [Settings, &DraggedGroupIndex, WorkingGroupIndex]()
+                                    {
+                                        return DraggedGroupIndex.IsSet()
+                                            && DraggedGroupIndex.GetValue() == WorkingGroupIndex
+                                            ? FSlateColor(Settings->ReorderDraggedContentColor)
+                                            : FSlateColor::UseForeground();
+                                    })
+                                .IsChecked_Lambda(
+                                    [&WorkingHiddenCategories, CategoryIds]()
+                                    {
+                                        int32 HiddenCount = 0;
+                                        for (const FName CategoryId : CategoryIds)
+                                        {
+                                            HiddenCount += WorkingHiddenCategories.Contains(CategoryId) ? 1 : 0;
+                                        }
+
+                                        if (HiddenCount == 0)
+                                        {
+                                            return ECheckBoxState::Checked;
+                                        }
+                                        if (HiddenCount == CategoryIds.Num())
+                                        {
+                                            return ECheckBoxState::Unchecked;
+                                        }
+                                        return ECheckBoxState::Undetermined;
+                                    })
+                                .OnCheckStateChanged_Lambda(
+                                    [&WorkingHiddenCategories, CategoryIds](ECheckBoxState State)
+                                    {
+                                        const bool bShow = State == ECheckBoxState::Checked;
+                                        for (const FName CategoryId : CategoryIds)
+                                        {
+                                            if (bShow)
+                                            {
+                                                WorkingHiddenCategories.Remove(CategoryId);
+                                            }
+                                            else
+                                            {
+                                                WorkingHiddenCategories.Add(CategoryId);
+                                            }
+                                        }
+                                    })
+                                [
+                                    SNew(SBox)
+                                    .Padding(FMargin(6.0f, 0.0f, 0.0f, 0.0f))
+                                    [
+                                        SNew(STextBlock)
+                                        .Text(Group.DisplayName)
+                                        .ColorAndOpacity_Lambda(
+                                            [Settings, &DraggedGroupIndex, WorkingGroupIndex]()
+                                            {
+                                                return DraggedGroupIndex.IsSet()
+                                                    && DraggedGroupIndex.GetValue() == WorkingGroupIndex
+                                                    ? FSlateColor(Settings->ReorderDraggedContentColor)
+                                                    : FSlateColor::UseForeground();
+                                            })
+                                    ]
+                                ]
+                            ]
                         ]
                     ]
 
-                    + SHorizontalBox::Slot()
-                    .AutoWidth()
-                    .VAlign(VAlign_Center)
-                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
+                    + SOverlay::Slot()
+                    .VAlign(VAlign_Top)
                     [
-                        SNew(SButton)
-                        .ButtonStyle(FAppStyle::Get(), "SimpleButton")
-                        .ContentPadding(FMargin(5.0f, 1.0f))
-                        .IsEnabled(Index > 0)
-                        .ToolTipText(LOCTEXT("MoveCategoryUp", "Move category up"))
-                        .Text(FText::FromString(TEXT("↑")))
-                        .OnClicked_Lambda([&WorkingGroups, &bWorkingCustomOrder, &RebuildCategoryList, Index]()
-                        {
-                            if (Index > 0 && WorkingGroups.IsValidIndex(Index))
-                            {
-                                WorkingGroups.Swap(Index, Index - 1);
-                                bWorkingCustomOrder = true;
-                                RebuildCategoryList();
-                            }
-                            return FReply::Handled();
-                        })
+                        SNew(SBox)
+                        .HeightOverride(FMath::Clamp(Settings->ReorderDropLineThickness, 1.0f, 8.0f))
+                        .Visibility(EVisibility::HitTestInvisible)
+                        [
+                            SNew(SBorder)
+                            .BorderImage(&DragRowBackgroundBrush)
+                            .BorderBackgroundColor_Lambda(
+                                [Settings, &DropTargetGroupIndex, &DropTargetZone, WorkingGroupIndex]()
+                                {
+                                    return DropTargetGroupIndex.IsSet()
+                                        && DropTargetGroupIndex.GetValue() == WorkingGroupIndex
+                                        && DropTargetZone.IsSet()
+                                        && DropTargetZone.GetValue() == SDragAndDropVerticalBox::EItemDropZone::AboveItem
+                                        ? FSlateColor(Settings->ReorderDropLineColor)
+                                        : FSlateColor(FLinearColor::Transparent);
+                                })
+                            .Padding(0.0f)
+                        ]
                     ]
 
-                    + SHorizontalBox::Slot()
-                    .AutoWidth()
-                    .VAlign(VAlign_Center)
-                    .Padding(2.0f, 0.0f, 0.0f, 0.0f)
+                    + SOverlay::Slot()
+                    .VAlign(VAlign_Bottom)
                     [
-                        SNew(SButton)
-                        .ButtonStyle(FAppStyle::Get(), "SimpleButton")
-                        .ContentPadding(FMargin(5.0f, 1.0f))
-                        .IsEnabled(Index + 1 < WorkingGroups.Num())
-                        .ToolTipText(LOCTEXT("MoveCategoryDown", "Move category down"))
-                        .Text(FText::FromString(TEXT("↓")))
-                        .OnClicked_Lambda([&WorkingGroups, &bWorkingCustomOrder, &RebuildCategoryList, Index]()
-                        {
-                            if (WorkingGroups.IsValidIndex(Index)
-                                && WorkingGroups.IsValidIndex(Index + 1))
-                            {
-                                WorkingGroups.Swap(Index, Index + 1);
-                                bWorkingCustomOrder = true;
-                                RebuildCategoryList();
-                            }
-                            return FReply::Handled();
-                        })
+                        SNew(SBox)
+                        .HeightOverride(FMath::Clamp(Settings->ReorderDropLineThickness, 1.0f, 8.0f))
+                        .Visibility(EVisibility::HitTestInvisible)
+                        [
+                            SNew(SBorder)
+                            .BorderImage(&DragRowBackgroundBrush)
+                            .BorderBackgroundColor_Lambda(
+                                [Settings, &DropTargetGroupIndex, &DropTargetZone, WorkingGroupIndex]()
+                                {
+                                    return DropTargetGroupIndex.IsSet()
+                                        && DropTargetGroupIndex.GetValue() == WorkingGroupIndex
+                                        && DropTargetZone.IsSet()
+                                        && DropTargetZone.GetValue() == SDragAndDropVerticalBox::EItemDropZone::BelowItem
+                                        ? FSlateColor(Settings->ReorderDropLineColor)
+                                        : FSlateColor(FLinearColor::Transparent);
+                                })
+                            .Padding(0.0f)
+                        ]
                     ]
+                ];
+            }
+
+            if (MatchingGroupCount == 0)
+            {
+                CategoryList->AddSlot()
+                .AutoHeight()
+                .Padding(8.0f, 12.0f)
+                [
+                    SNew(STextBlock)
+                    .Text(LOCTEXT("NoCategorySearchMatches", "No categories match this search."))
+                    .Justification(ETextJustify::Center)
+                    .ColorAndOpacity(FSlateColor(EStyleColor::ForegroundHeader))
                 ];
             }
         };
@@ -433,20 +639,100 @@ namespace PruneDetailsCustomizationPrivate
             SNew(SWindow)
             .Title(bCreatingNew
                 ? LOCTEXT("NewFilterTitle", "New Filter")
-                : LOCTEXT("EditFilterTitle", "Edit Filter"))
-            .SizingRule(ESizingRule::Autosized)
+                : FText::Format(
+                    LOCTEXT("EditFilterTitleNamed", "Edit Filter - {0}"),
+                    FText::FromString(InitialData.Name)))
+            .ClientSize(FVector2D(
+                FMath::Clamp(Settings->FilterEditorDefaultWidth, 420.0f, 1600.0f),
+                FMath::Clamp(Settings->FilterEditorDefaultHeight, 420.0f, 1600.0f)))
+            .SizingRule(ESizingRule::UserSized)
             .SupportsMaximize(false)
             .SupportsMinimize(false);
 
         TSharedRef<SHorizontalBox> BottomButtons = SNew(SHorizontalBox);
 
+        BottomButtons->AddSlot()
+        .AutoWidth()
+        .VAlign(VAlign_Center)
+        .Padding(0.0f, 0.0f, 8.0f, 0.0f)
+        [
+            SNew(SCheckBox)
+            .Style(FAppStyle::Get(), "DetailsView.SectionButton")
+            .IsEnabled(bCanUseClassScope)
+            .IsChecked_Lambda([&bWorkingGlobal]()
+            {
+                return bWorkingGlobal
+                    ? ECheckBoxState::Checked
+                    : ECheckBoxState::Unchecked;
+            })
+            .OnCheckStateChanged_Lambda([&bWorkingGlobal](ECheckBoxState State)
+            {
+                bWorkingGlobal = State == ECheckBoxState::Checked;
+            })
+            .ToolTipText_Lambda([LayoutContext, InitialData, &bWorkingGlobal]()
+            {
+                if (bWorkingGlobal)
+                {
+                    return LOCTEXT(
+                        "GlobalScopeTooltipActive",
+                        "Global filter. This filter is available on all Actor classes. Click to scope it to the current class instead.");
+                }
+
+                if (!InitialData.ScopeClassName.IsNone()
+                    && InitialData.ScopeClassName != LayoutContext->GetActorClassName())
+                {
+                    return FText::Format(
+                        LOCTEXT(
+                            "InheritedScopeTooltip",
+                            "Class filter. This filter is scoped to {0} and derived classes. Click to make it Global."),
+                        FText::FromName(InitialData.ScopeClassName));
+                }
+
+                return FText::Format(
+                    LOCTEXT(
+                        "ClassScopeTooltip",
+                        "Class filter. This filter is scoped to {0} and derived classes. Click to make it Global."),
+                    LayoutContext->GetSelectionLabel());
+            })
+            [
+                SNew(SBox)
+                .WidthOverride(16.0f)
+                .HeightOverride(16.0f)
+                .HAlign(HAlign_Center)
+                .VAlign(VAlign_Center)
+                [
+                    SNew(SImage)
+                    .ColorAndOpacity(FSlateColor::UseForeground())
+                    .Image(GetGlobalScopeIconBrush())
+                ]
+            ]
+        ];
+
         if (!bCreatingNew && !bEditingNative)
         {
+            BottomButtons->AddSlot()
+            .AutoWidth()
+            .Padding(0.0f, 0.0f, 6.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("DuplicateFilter", "Duplicate..."))
+                .ToolTipText(LOCTEXT(
+                    "DuplicateFilterTooltip",
+                    "Open a new filter prefilled with the current visibility, order, and scope."))
+                .OnClicked_Lambda([Dialog, &Action]()
+                {
+                    Action = EFilterEditorAction::Duplicate;
+                    Dialog->RequestDestroyWindow();
+                    return FReply::Handled();
+                })
+            ];
+
             BottomButtons->AddSlot()
             .AutoWidth()
             [
                 SNew(SButton)
                 .Text(LOCTEXT("DeleteFilter", "Delete Filter"))
+                .ToolTipText(LOCTEXT("DeleteFilterTooltip", "Delete this Prune filter."))
                 .OnClicked_Lambda([Dialog, &Action]()
                 {
                     Action = EFilterEditorAction::Delete;
@@ -457,6 +743,23 @@ namespace PruneDetailsCustomizationPrivate
         }
         else if (!bCreatingNew && bEditingNative)
         {
+            BottomButtons->AddSlot()
+            .AutoWidth()
+            .Padding(0.0f, 0.0f, 6.0f, 0.0f)
+            [
+                SNew(SButton)
+                .Text(LOCTEXT("DuplicateEpicFilter", "Duplicate..."))
+                .ToolTipText(LOCTEXT(
+                    "DuplicateEpicFilterTooltip",
+                    "Create a new Prune filter from this Epic filter without changing the Epic filter itself."))
+                .OnClicked_Lambda([Dialog, &Action]()
+                {
+                    Action = EFilterEditorAction::Duplicate;
+                    Dialog->RequestDestroyWindow();
+                    return FReply::Handled();
+                })
+            ];
+
             BottomButtons->AddSlot()
             .AutoWidth()
             [
@@ -523,7 +826,7 @@ namespace PruneDetailsCustomizationPrivate
                     .Text(FText::Format(
                         LOCTEXT(
                             "FilterEditorDescription",
-                            "Choose which categories are visible and their order when this filter is active for {0}."),
+                            "Choose which categories are visible and drag them into the order you want when this filter is active for {0}."),
                         LayoutContext->GetSelectionLabel()))
                     .AutoWrapText(true)
                 ]
@@ -548,67 +851,116 @@ namespace PruneDetailsCustomizationPrivate
 
                 + SVerticalBox::Slot()
                 .AutoHeight()
-                .Padding(0.0f, 10.0f, 0.0f, 0.0f)
-                [
-                    SNew(SCheckBox)
-                    .IsEnabled(bCanUseClassScope)
-                    .IsChecked_Lambda([&bWorkingGlobal]()
-                    {
-                        return bWorkingGlobal
-                            ? ECheckBoxState::Checked
-                            : ECheckBoxState::Unchecked;
-                    })
-                    .OnCheckStateChanged_Lambda([&bWorkingGlobal](ECheckBoxState State)
-                    {
-                        bWorkingGlobal = State == ECheckBoxState::Checked;
-                    })
-                    [
-                        SNew(STextBlock)
-                        .Text(LOCTEXT("GlobalFilterLabel", "Global - show this filter on any Actor"))
-                    ]
-                ]
-
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(22.0f, 2.0f, 0.0f, 0.0f)
-                [
-                    SNew(STextBlock)
-                    .Text_Lambda([LayoutContext, InitialData, &bWorkingGlobal]()
-                    {
-                        if (bWorkingGlobal)
-                        {
-                            return LOCTEXT("GlobalScopeDescription", "Scope: all Actor classes");
-                        }
-
-                        if (!InitialData.ScopeClassName.IsNone()
-                            && InitialData.ScopeClassName != LayoutContext->GetActorClassName())
-                        {
-                            return FText::Format(
-                                LOCTEXT("InheritedClassScopeDescription", "Scope: {0} and derived classes"),
-                                FText::FromName(InitialData.ScopeClassName));
-                        }
-
-                        return FText::Format(
-                            LOCTEXT("ClassScopeDescription", "Scope: {0} and derived classes"),
-                            LayoutContext->GetSelectionLabel());
-                    })
-                    .TextStyle(FAppStyle::Get(), "SmallText")
-                ]
-
-                + SVerticalBox::Slot()
-                .AutoHeight()
                 .Padding(0.0f, 10.0f, 0.0f, 4.0f)
                 [
+                    SNew(STextBlock)
+                    .Text(LOCTEXT("FilterDescriptionLabel", "Description"))
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                [
+                    SAssignNew(DescriptionTextBox, SEditableTextBox)
+                    .Text(FText::FromString(InitialData.Description))
+                    .HintText(LOCTEXT("FilterDescriptionHint", "Optional description shown in the filter tooltip"))
+                    .MinDesiredWidth(430.0f)
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(0.0f, 12.0f, 0.0f, 4.0f)
+                [
                     SNew(SHorizontalBox)
+
                     + SHorizontalBox::Slot()
-                    .FillWidth(1.0f)
+                    .AutoWidth()
                     .VAlign(VAlign_Center)
                     [
                         SNew(STextBlock)
                         .Text(LOCTEXT("FilterCategoriesLabel", "Categories"))
                     ]
+
                     + SHorizontalBox::Slot()
                     .AutoWidth()
+                    .VAlign(VAlign_Center)
+                    .Padding(8.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(STextBlock)
+                        .Text_Lambda([&WorkingGroups, &WorkingHiddenCategories]()
+                        {
+                            int32 VisibleGroups = 0;
+                            for (const FPruneCategoryGroupInfo& Group : WorkingGroups)
+                            {
+                                bool bAnyVisible = false;
+                                for (const FName CategoryId : Group.Ids)
+                                {
+                                    if (!WorkingHiddenCategories.Contains(CategoryId))
+                                    {
+                                        bAnyVisible = true;
+                                        break;
+                                    }
+                                }
+
+                                VisibleGroups += bAnyVisible ? 1 : 0;
+                            }
+
+                            return FText::Format(
+                                LOCTEXT("VisibleCategoryCount", "{0} of {1} shown"),
+                                FText::AsNumber(VisibleGroups),
+                                FText::AsNumber(WorkingGroups.Num()));
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .FillWidth(1.0f)
+                    [
+                        SNew(SBox)
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    [
+                        SNew(SButton)
+                        .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                        .Text(LOCTEXT("ShowAllCategories", "Show All"))
+                        .ToolTipText(LOCTEXT("ShowAllCategoriesTooltip", "Show every category in this filter."))
+                        .OnClicked_Lambda([&WorkingGroups, &WorkingHiddenCategories]()
+                        {
+                            for (const FPruneCategoryGroupInfo& Group : WorkingGroups)
+                            {
+                                for (const FName CategoryId : Group.Ids)
+                                {
+                                    WorkingHiddenCategories.Remove(CategoryId);
+                                }
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(SButton)
+                        .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                        .Text(LOCTEXT("HideAllCategories", "Hide All"))
+                        .ToolTipText(LOCTEXT("HideAllCategoriesTooltip", "Hide every category in this filter."))
+                        .OnClicked_Lambda([&WorkingGroups, &WorkingHiddenCategories]()
+                        {
+                            for (const FPruneCategoryGroupInfo& Group : WorkingGroups)
+                            {
+                                for (const FName CategoryId : Group.Ids)
+                                {
+                                    WorkingHiddenCategories.Add(CategoryId);
+                                }
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .Padding(4.0f, 0.0f, 0.0f, 0.0f)
                     [
                         SNew(SButton)
                         .ButtonStyle(FAppStyle::Get(), "SimpleButton")
@@ -626,15 +978,157 @@ namespace PruneDetailsCustomizationPrivate
 
                 + SVerticalBox::Slot()
                 .AutoHeight()
+                .Padding(0.0f, 0.0f, 0.0f, 6.0f)
                 [
-                    SNew(SBox)
-                    .MinDesiredWidth(430.0f)
-                    .MaxDesiredHeight(520.0f)
+                    SNew(SSearchBox)
+                    .HintText(LOCTEXT("CategorySearchHint", "Search categories"))
+                    .OnTextChanged_Lambda([&CategorySearchText, &DraggedGroupIndex, &DropTargetGroupIndex, &DropTargetZone, &RebuildCategoryList](const FText& NewText)
+                    {
+                        CategorySearchText = NewText.ToString();
+                        DraggedGroupIndex.Reset();
+                        DropTargetGroupIndex.Reset();
+                        DropTargetZone.Reset();
+                        RebuildCategoryList();
+                    })
+                ]
+
+                + SVerticalBox::Slot()
+                .FillHeight(1.0f)
+                [
+                    SNew(SBorder)
+                    .BorderImage(FAppStyle::Get().GetBrush("Brushes.Panel"))
+                    .Padding(4.0f)
                     [
                         SNew(SScrollBox)
                         + SScrollBox::Slot()
                         [
-                            SAssignNew(CategoryList, SVerticalBox)
+                            SAssignNew(CategoryList, SDragAndDropVerticalBox)
+                            .OnDragDetected_Lambda(
+                                [&CategorySearchText, &DraggedGroupIndex, &DropTargetGroupIndex, &DropTargetZone, &CategoryList](
+                                   const FGeometry&,
+                                   const FPointerEvent&,
+                                   int32 SourceIndex,
+                                   SVerticalBox::FSlot* SourceSlot)
+                                {
+                                    if (!CategorySearchText.TrimStartAndEnd().IsEmpty())
+                                    {
+                                        return FReply::Unhandled();
+                                    }
+
+                                    DraggedGroupIndex = SourceIndex;
+                                    DropTargetGroupIndex.Reset();
+                                    DropTargetZone.Reset();
+                                    if (CategoryList.IsValid())
+                                    {
+                                        CategoryList->Invalidate(EInvalidateWidgetReason::Paint);
+                                    }
+
+                                    TSharedRef<FDragAndDropVerticalBoxOp> DragOp =
+                                        MakeShared<FDragAndDropVerticalBoxOp>();
+                                    DragOp->SlotIndexBeingDragged = SourceIndex;
+                                    DragOp->SlotBeingDragged = SourceSlot;
+                                    return FReply::Handled().BeginDragDrop(DragOp);
+                                })
+                            .OnDragEnter_Lambda(
+                                [&DraggedGroupIndex, &CategoryList](const FDragDropEvent& DragDropEvent)
+                                {
+                                    const TSharedPtr<FDragAndDropVerticalBoxOp> DragOp =
+                                        DragDropEvent.GetOperationAs<FDragAndDropVerticalBoxOp>();
+                                    if (DragOp.IsValid())
+                                    {
+                                        DraggedGroupIndex = DragOp->SlotIndexBeingDragged;
+                                        if (CategoryList.IsValid())
+                                        {
+                                            CategoryList->Invalidate(EInvalidateWidgetReason::Paint);
+                                        }
+                                    }
+                                })
+                            .OnDragLeave_Lambda(
+                                [&DraggedGroupIndex, &DropTargetGroupIndex, &DropTargetZone, &CategoryList](const FDragDropEvent&)
+                                {
+                                    DraggedGroupIndex.Reset();
+                                    DropTargetGroupIndex.Reset();
+                                    DropTargetZone.Reset();
+                                    if (CategoryList.IsValid())
+                                    {
+                                        CategoryList->Invalidate(EInvalidateWidgetReason::Paint);
+                                    }
+                                })
+                            .OnCanAcceptDropAdvanced_Lambda(
+                                [&CategorySearchText, &DropTargetGroupIndex, &DropTargetZone, &CategoryList](
+                                   const FDragDropEvent& DragDropEvent,
+                                   SDragAndDropVerticalBox::EItemDropZone DropZone,
+                                   int32 TargetIndex,
+                                   SVerticalBox::FSlot*) -> TOptional<SDragAndDropVerticalBox::EItemDropZone>
+                                {
+                                    const TSharedPtr<FDragAndDropVerticalBoxOp> DragOp =
+                                        DragDropEvent.GetOperationAs<FDragAndDropVerticalBoxOp>();
+
+                                    if (!CategorySearchText.TrimStartAndEnd().IsEmpty()
+                                        || !DragOp.IsValid()
+                                        || DragOp->SlotIndexBeingDragged == TargetIndex)
+                                    {
+                                        DropTargetGroupIndex.Reset();
+                                        DropTargetZone.Reset();
+                                        if (CategoryList.IsValid())
+                                        {
+                                            CategoryList->Invalidate(EInvalidateWidgetReason::Paint);
+                                        }
+                                        return TOptional<SDragAndDropVerticalBox::EItemDropZone>();
+                                    }
+
+                                    DropTargetGroupIndex = TargetIndex;
+                                    DropTargetZone = DropZone;
+                                    if (CategoryList.IsValid())
+                                    {
+                                        CategoryList->Invalidate(EInvalidateWidgetReason::Paint);
+                                    }
+
+                                    return DropZone;
+                                })
+                            .OnAcceptDrop_Lambda(
+                                [&WorkingGroups, &bWorkingCustomOrder, &DraggedGroupIndex, &DropTargetGroupIndex, &DropTargetZone, &RebuildCategoryList](
+                                    const FDragDropEvent& DragDropEvent,
+                                    SDragAndDropVerticalBox::EItemDropZone DropZone,
+                                    int32 TargetIndex,
+                                    SVerticalBox::FSlot*)
+                                {
+                                    const TSharedPtr<FDragAndDropVerticalBoxOp> DragOp =
+                                        DragDropEvent.GetOperationAs<FDragAndDropVerticalBoxOp>();
+                                    if (!DragOp.IsValid())
+                                    {
+                                        return FReply::Unhandled();
+                                    }
+
+                                    const int32 SourceIndex = DragOp->SlotIndexBeingDragged;
+                                    if (!WorkingGroups.IsValidIndex(SourceIndex)
+                                        || !WorkingGroups.IsValidIndex(TargetIndex))
+                                    {
+                                        return FReply::Unhandled();
+                                    }
+
+                                    FPruneCategoryGroupInfo MovingGroup = WorkingGroups[SourceIndex];
+                                    WorkingGroups.RemoveAt(SourceIndex);
+
+                                    int32 InsertIndex = TargetIndex;
+                                    if (SourceIndex < TargetIndex)
+                                    {
+                                        --InsertIndex;
+                                    }
+                                    if (DropZone == SDragAndDropVerticalBox::EItemDropZone::BelowItem)
+                                    {
+                                        ++InsertIndex;
+                                    }
+
+                                    InsertIndex = FMath::Clamp(InsertIndex, 0, WorkingGroups.Num());
+                                    WorkingGroups.Insert(MoveTemp(MovingGroup), InsertIndex);
+                                    bWorkingCustomOrder = true;
+                                    DraggedGroupIndex.Reset();
+                                    DropTargetGroupIndex.Reset();
+                                    DropTargetZone.Reset();
+                                    RebuildCategoryList();
+                                    return FReply::Handled();
+                                })
                         ]
                     ]
                 ]
@@ -648,6 +1142,15 @@ namespace PruneDetailsCustomizationPrivate
             ]);
 
         RebuildCategoryList();
+
+        if (CategoryList.IsValid())
+        {
+            // Prune draws its own configurable insertion line inside each row.
+            // Keep the native drag box's paint-only drop brushes invisible.
+            const FSlateColorBrush TransparentDropIndicatorBrush{ FLinearColor::Transparent };
+            CategoryList->SetDropIndicator_Above(TransparentDropIndicatorBrush);
+            CategoryList->SetDropIndicator_Below(TransparentDropIndicatorBrush);
+        }
 
         FSlateApplication::Get().AddModalWindow(
             Dialog,
@@ -664,6 +1167,9 @@ namespace PruneDetailsCustomizationPrivate
         Result.Name = NameTextBox.IsValid()
             ? NameTextBox->GetText().ToString().TrimStartAndEnd()
             : InitialData.Name;
+        Result.Description = DescriptionTextBox.IsValid()
+            ? DescriptionTextBox->GetText().ToString().TrimStartAndEnd()
+            : InitialData.Description;
         Result.bGlobal = bWorkingGlobal;
         Result.HiddenCategories = MoveTemp(WorkingHiddenCategories);
         Result.OrderedCategoryIds = bWorkingCustomOrder
@@ -715,6 +1221,7 @@ namespace PruneDetailsCustomizationPrivate
             bSuccess = State->CreatePreset(
                 Context,
                 Result.Name,
+                Result.Description,
                 Result.bGlobal,
                 Result.HiddenCategories,
                 Result.OrderedCategoryIds,
@@ -726,6 +1233,7 @@ namespace PruneDetailsCustomizationPrivate
                 Context,
                 ExistingFilter->CustomPresetId,
                 Result.Name,
+                Result.Description,
                 Result.bGlobal,
                 Result.HiddenCategories,
                 Result.OrderedCategoryIds,
@@ -736,6 +1244,7 @@ namespace PruneDetailsCustomizationPrivate
             bSuccess = State->SaveNativeOverride(
                 Context,
                 *ExistingFilter,
+                Result.Description,
                 Result.bGlobal,
                 Result.HiddenCategories,
                 Result.OrderedCategoryIds,
@@ -788,6 +1297,101 @@ namespace PruneDetailsCustomizationPrivate
         }
     }
 
+    static void OpenDuplicateFilterEditor(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FPruneEditableFilter& SourceFilter,
+        const FPruneFilterEditorData* EditedSourceData = nullptr)
+    {
+        FPruneFilterEditorData SourceData;
+        if (EditedSourceData != nullptr)
+        {
+            SourceData = *EditedSourceData;
+        }
+        else if (!State->BuildEditorData(Context, SourceFilter, SourceData))
+        {
+            return;
+        }
+
+        FPruneFilterEditorData DuplicateData;
+        DuplicateData.Name = State->MakeSuggestedDuplicateName(
+            Context,
+            SourceData.Name);
+        DuplicateData.Description = SourceData.Description;
+        DuplicateData.bGlobal = SourceData.bGlobal;
+        DuplicateData.ScopeClassName = DuplicateData.bGlobal
+            ? NAME_None
+            : Context->GetActorClassName();
+        DuplicateData.HiddenCategories = SourceData.HiddenCategories;
+        DuplicateData.OrderedCategoryIds = SourceData.OrderedCategoryIds;
+        DuplicateData.bNativeFilter = false;
+        DuplicateData.bHasNativeOverride = false;
+
+        const TOptional<FFilterEditorResult> DuplicateResult =
+            ShowFilterEditor(
+                Context,
+                DuplicateData,
+                true,
+                false);
+
+        if (DuplicateResult.IsSet())
+        {
+            HandleEditorResult(
+                State,
+                Context,
+                nullptr,
+                DuplicateResult.GetValue());
+        }
+    }
+
+    static void OpenSpecificFilterEditor(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FPruneEditableFilter& Filter)
+    {
+        FPruneFilterEditorData InitialData;
+        if (!State->BuildEditorData(Context, Filter, InitialData))
+        {
+            return;
+        }
+
+        const TOptional<FFilterEditorResult> Result = ShowFilterEditor(
+            Context,
+            InitialData,
+            false,
+            Filter.Kind == EPruneFilterKind::Native);
+
+        if (!Result.IsSet())
+        {
+            return;
+        }
+
+        const FFilterEditorResult& EditorResult = Result.GetValue();
+        if (EditorResult.Action == EFilterEditorAction::Duplicate)
+        {
+            FPruneFilterEditorData EditedSourceData = InitialData;
+            EditedSourceData.Name = EditorResult.Name.IsEmpty()
+                ? InitialData.Name
+                : EditorResult.Name;
+            EditedSourceData.Description = EditorResult.Description;
+            EditedSourceData.bGlobal = EditorResult.bGlobal;
+            EditedSourceData.HiddenCategories = EditorResult.HiddenCategories;
+            EditedSourceData.OrderedCategoryIds = EditorResult.OrderedCategoryIds;
+            OpenDuplicateFilterEditor(
+                State,
+                Context,
+                Filter,
+                &EditedSourceData);
+            return;
+        }
+
+        HandleEditorResult(
+            State,
+            Context,
+            &Filter,
+            EditorResult);
+    }
+
     static void OpenActiveFilterEditor(
         const TWeakPtr<FPruneState>& WeakState,
         const TWeakPtr<const IDetailsView>& WeakDetailsView)
@@ -807,27 +1411,687 @@ namespace PruneDetailsCustomizationPrivate
         }
 
         FPruneEditableFilter Filter;
-        FPruneFilterEditorData InitialData;
-        if (!State->ResolveSingleActiveFilter(Context.ToSharedRef(), Filter)
-            || !State->BuildEditorData(Context.ToSharedRef(), Filter, InitialData))
+        if (!State->ResolveSingleActiveFilter(Context.ToSharedRef(), Filter))
         {
             return;
         }
 
-        const TOptional<FFilterEditorResult> Result = ShowFilterEditor(
-            Context.ToSharedRef(),
-            InitialData,
-            false,
-            Filter.Kind == EPruneFilterKind::Native);
+        OpenSpecificFilterEditor(State.ToSharedRef(), Context.ToSharedRef(), Filter);
+    }
 
-        if (Result.IsSet())
+    static FText BuildManagedFilterMetaText(const FPruneManagedFilterInfo& Info)
+    {
+        if (Info.Kind == EPruneFilterKind::Native)
         {
-            HandleEditorResult(
-                State.ToSharedRef(),
-                Context.ToSharedRef(),
-                &Filter,
-                Result.GetValue());
+            if (!Info.bHasNativeOverride)
+            {
+                return LOCTEXT("ManagedFilterEpic", "Epic");
+            }
+
+            if (Info.bGlobal)
+            {
+                return LOCTEXT("ManagedFilterEpicGlobal", "Epic Override | Global");
+            }
+
+            return FText::Format(
+                LOCTEXT("ManagedFilterEpicClass", "Epic Override | Class: {0}"),
+                FText::FromName(Info.ScopeClassName));
         }
+
+        if (Info.bGlobal)
+        {
+            return LOCTEXT("ManagedFilterPruneGlobal", "Prune | Global");
+        }
+
+        return FText::Format(
+            LOCTEXT("ManagedFilterPruneClass", "Prune | Class: {0}"),
+            FText::FromName(Info.ScopeClassName));
+    }
+
+    static void OpenFilterManager(
+        const TWeakPtr<FPruneState>& WeakState,
+        const TWeakPtr<const IDetailsView>& WeakDetailsView)
+    {
+        const TSharedPtr<FPruneState> State = WeakState.Pin();
+        const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+        if (!State.IsValid() || !DetailsView.IsValid())
+        {
+            return;
+        }
+
+        const TSharedPtr<FPruneLayoutContext> Context =
+            State->FindLatestLayoutContextForDetailsView(DetailsView);
+        if (!Context.IsValid() || Context->GetActorClass() == nullptr)
+        {
+            return;
+        }
+
+        const UPruneSettings* Settings = UPruneSettings::Get();
+        TArray<FPruneManagedFilterInfo> WorkingFilters =
+            State->GetManagedFilters(Context.ToSharedRef());
+        TSharedPtr<SDragAndDropVerticalBox> FilterList;
+        FString ManagerSearchText;
+        TOptional<int32> DraggedFilterIndex;
+        TOptional<int32> DropTargetFilterIndex;
+        TOptional<SDragAndDropVerticalBox::EItemDropZone> DropTargetFilterZone;
+        static const FSlateColorBrush ManagerRowBrush{ FLinearColor::White };
+
+        TSharedRef<SWindow> Dialog =
+            SNew(SWindow)
+            .Title(FText::Format(
+                LOCTEXT("FilterManagerTitle", "Prune Filter Manager - {0}"),
+                Context->GetSelectionLabel()))
+            .ClientSize(FVector2D(
+                FMath::Clamp(Settings->FilterManagerDefaultWidth, 480.0f, 1600.0f),
+                FMath::Clamp(Settings->FilterManagerDefaultHeight, 420.0f, 1600.0f)))
+            .SizingRule(ESizingRule::UserSized)
+            .SupportsMaximize(false)
+            .SupportsMinimize(false);
+
+        const TWeakPtr<SWindow> WeakDialog = Dialog;
+
+        TFunction<void()> RebuildFilterList;
+        RebuildFilterList = [&]()
+        {
+            if (!FilterList.IsValid())
+            {
+                return;
+            }
+
+            FilterList->ClearChildren();
+
+            if (WorkingFilters.IsEmpty())
+            {
+                FilterList->AddSlot()
+                .AutoHeight()
+                .Padding(8.0f, 16.0f)
+                [
+                    SNew(STextBlock)
+                    .Text(LOCTEXT("NoManagedFilters", "No editable filters are available for this Actor class."))
+                    .Justification(ETextJustify::Center)
+                    .ColorAndOpacity(FSlateColor(EStyleColor::ForegroundHeader))
+                ];
+                return;
+            }
+
+            const FString Search = ManagerSearchText.TrimStartAndEnd();
+            const bool bSearchActive = !Search.IsEmpty();
+            int32 VisibleFilterCount = 0;
+            const TArray<FString> CheckedSectionLabels = Context->GetCheckedSectionLabels();
+
+            for (int32 Index = 0; Index < WorkingFilters.Num(); ++Index)
+            {
+                const FPruneManagedFilterInfo Info = WorkingFilters[Index];
+                const int32 WorkingIndex = Index;
+                const FText MetaText = BuildManagedFilterMetaText(Info);
+                const bool bIsActive = CheckedSectionLabels.Contains(Info.DisplayName.ToString());
+                const FText DisplayMetaText = bIsActive
+                    ? FText::Format(
+                        LOCTEXT("ManagedFilterActiveMeta", "{0} | Active"),
+                        MetaText)
+                    : MetaText;
+
+                if (bSearchActive)
+                {
+                    const FString SearchableText = FString::Printf(
+                        TEXT("%s %s %s"),
+                        *Info.DisplayName.ToString(),
+                        *DisplayMetaText.ToString(),
+                        *Info.Description);
+                    if (!SearchableText.Contains(Search, ESearchCase::IgnoreCase))
+                    {
+                        continue;
+                    }
+                }
+
+                ++VisibleFilterCount;
+
+                FilterList->AddSlot()
+                .AutoHeight()
+                .Padding(2.0f, 2.0f)
+                [
+                    SNew(SOverlay)
+
+                    + SOverlay::Slot()
+                    [
+                        SNew(SBorder)
+                        .BorderImage(&ManagerRowBrush)
+                        .BorderBackgroundColor_Lambda(
+                            [Settings, &DraggedFilterIndex, WorkingIndex]()
+                            {
+                                return DraggedFilterIndex.IsSet()
+                                    && DraggedFilterIndex.GetValue() == WorkingIndex
+                                    ? FSlateColor(Settings->ReorderDragColor)
+                                    : FSlateColor(FLinearColor::Transparent);
+                            })
+                        .Padding(FMargin(6.0f, 5.0f))
+                        [
+                            SNew(SHorizontalBox)
+
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .VAlign(VAlign_Center)
+                            .Padding(2.0f, 0.0f, 8.0f, 0.0f)
+                            [
+                                SNew(STextBlock)
+                                .Text(FText::FromString(TEXT("≡")))
+                                .TextStyle(FAppStyle::Get(), "SmallText")
+                                .ColorAndOpacity_Lambda(
+                                    [Settings, &DraggedFilterIndex, WorkingIndex]()
+                                    {
+                                        return DraggedFilterIndex.IsSet()
+                                            && DraggedFilterIndex.GetValue() == WorkingIndex
+                                            ? FSlateColor(Settings->ReorderDraggedContentColor)
+                                            : FSlateColor::UseForeground();
+                                    })
+                                .ToolTipText(LOCTEXT("DragFilterButtonTooltip", "Drag to reorder this filter button for the current Actor class."))
+                            ]
+
+                            + SHorizontalBox::Slot()
+                            .FillWidth(1.0f)
+                            .VAlign(VAlign_Center)
+                            [
+                                SNew(SVerticalBox)
+
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
+                                [
+                                    SNew(STextBlock)
+                                    .Text(Info.DisplayName)
+                                    .ColorAndOpacity_Lambda(
+                                        [Settings, &DraggedFilterIndex, WorkingIndex]()
+                                        {
+                                            return DraggedFilterIndex.IsSet()
+                                                && DraggedFilterIndex.GetValue() == WorkingIndex
+                                                ? FSlateColor(Settings->ReorderDraggedContentColor)
+                                                : FSlateColor::UseForeground();
+                                        })
+                                ]
+
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
+                                .Padding(0.0f, 1.0f, 0.0f, 0.0f)
+                                [
+                                    SNew(STextBlock)
+                                    .Text(DisplayMetaText)
+                                    .TextStyle(FAppStyle::Get(), "SmallText")
+                                    .ColorAndOpacity_Lambda(
+                                        [Settings, &DraggedFilterIndex, WorkingIndex, bIsActive]()
+                                        {
+                                            return DraggedFilterIndex.IsSet()
+                                                && DraggedFilterIndex.GetValue() == WorkingIndex
+                                                ? FSlateColor(Settings->ReorderDraggedContentColor)
+                                                : bIsActive
+                                                    ? FSlateColor(EStyleColor::AccentBlue)
+                                                    : FSlateColor(EStyleColor::ForegroundHeader);
+                                        })
+                                ]
+
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
+                                .Padding(0.0f, 3.0f, 0.0f, 0.0f)
+                                [
+                                    SNew(STextBlock)
+                                    .Text(FText::FromString(Info.Description))
+                                    .TextStyle(FAppStyle::Get(), "SmallText")
+                                    .AutoWrapText(true)
+                                    .Visibility(Info.Description.IsEmpty()
+                                        ? EVisibility::Collapsed
+                                        : EVisibility::HitTestInvisible)
+                                    .ColorAndOpacity_Lambda(
+                                        [Settings, &DraggedFilterIndex, WorkingIndex]()
+                                        {
+                                            return DraggedFilterIndex.IsSet()
+                                                && DraggedFilterIndex.GetValue() == WorkingIndex
+                                                ? FSlateColor(Settings->ReorderDraggedContentColor)
+                                                : FSlateColor(EStyleColor::ForegroundHeader);
+                                        })
+                                ]
+                            ]
+
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .VAlign(VAlign_Center)
+                            .Padding(8.0f, 0.0f, 0.0f, 0.0f)
+                            [
+                                SNew(SButton)
+                                .Text(LOCTEXT("ManageEditFilter", "Edit"))
+                                .ToolTipText(LOCTEXT("ManageEditFilterTooltip", "Edit this filter's categories, order, description, and scope."))
+                                .OnClicked_Lambda([State, Context, Info, &WorkingFilters, &RebuildFilterList]()
+                                {
+                                    FPruneEditableFilter Filter;
+                                    if (State->ResolveManagedFilter(Context.ToSharedRef(), Info.OrderKey, Filter))
+                                    {
+                                        OpenSpecificFilterEditor(
+                                            State.ToSharedRef(),
+                                            Context.ToSharedRef(),
+                                            Filter);
+                                        WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                        RebuildFilterList();
+                                    }
+                                    return FReply::Handled();
+                                })
+                            ]
+
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .VAlign(VAlign_Center)
+                            .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+                            [
+                                SNew(SButton)
+                                .Text(LOCTEXT("ManageDuplicateFilter", "Duplicate..."))
+                                .ToolTipText(Info.Kind == EPruneFilterKind::Native
+                                    ? LOCTEXT("ManageDuplicateEpicTooltip", "Create a new Prune filter from this Epic filter without changing the Epic filter itself.")
+                                    : LOCTEXT("ManageDuplicatePruneTooltip", "Create a new Prune filter prefilled from this filter."))
+                                .OnClicked_Lambda([State, Context, Info, &WorkingFilters, &RebuildFilterList]()
+                                {
+                                    FPruneEditableFilter Filter;
+                                    if (State->ResolveManagedFilter(Context.ToSharedRef(), Info.OrderKey, Filter))
+                                    {
+                                        OpenDuplicateFilterEditor(
+                                            State.ToSharedRef(),
+                                            Context.ToSharedRef(),
+                                            Filter);
+                                        WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                        RebuildFilterList();
+                                    }
+                                    return FReply::Handled();
+                                })
+                            ]
+                        ]
+                    ]
+
+                    + SOverlay::Slot()
+                    .VAlign(VAlign_Top)
+                    [
+                        SNew(SBox)
+                        .HeightOverride(FMath::Clamp(Settings->ReorderDropLineThickness, 1.0f, 8.0f))
+                        .Visibility(EVisibility::HitTestInvisible)
+                        [
+                            SNew(SBorder)
+                            .BorderImage(&ManagerRowBrush)
+                            .BorderBackgroundColor_Lambda(
+                                [Settings, &DropTargetFilterIndex, &DropTargetFilterZone, WorkingIndex]()
+                                {
+                                    return DropTargetFilterIndex.IsSet()
+                                        && DropTargetFilterIndex.GetValue() == WorkingIndex
+                                        && DropTargetFilterZone.IsSet()
+                                        && DropTargetFilterZone.GetValue() == SDragAndDropVerticalBox::EItemDropZone::AboveItem
+                                        ? FSlateColor(Settings->ReorderDropLineColor)
+                                        : FSlateColor(FLinearColor::Transparent);
+                                })
+                            .Padding(0.0f)
+                        ]
+                    ]
+
+                    + SOverlay::Slot()
+                    .VAlign(VAlign_Bottom)
+                    [
+                        SNew(SBox)
+                        .HeightOverride(FMath::Clamp(Settings->ReorderDropLineThickness, 1.0f, 8.0f))
+                        .Visibility(EVisibility::HitTestInvisible)
+                        [
+                            SNew(SBorder)
+                            .BorderImage(&ManagerRowBrush)
+                            .BorderBackgroundColor_Lambda(
+                                [Settings, &DropTargetFilterIndex, &DropTargetFilterZone, WorkingIndex]()
+                                {
+                                    return DropTargetFilterIndex.IsSet()
+                                        && DropTargetFilterIndex.GetValue() == WorkingIndex
+                                        && DropTargetFilterZone.IsSet()
+                                        && DropTargetFilterZone.GetValue() == SDragAndDropVerticalBox::EItemDropZone::BelowItem
+                                        ? FSlateColor(Settings->ReorderDropLineColor)
+                                        : FSlateColor(FLinearColor::Transparent);
+                                })
+                            .Padding(0.0f)
+                        ]
+                    ]
+                ];
+            }
+
+            if (bSearchActive && VisibleFilterCount == 0)
+            {
+                FilterList->AddSlot()
+                .AutoHeight()
+                .Padding(8.0f, 16.0f)
+                [
+                    SNew(STextBlock)
+                    .Text(LOCTEXT("NoManagedFilterMatches", "No filters match this search."))
+                    .Justification(ETextJustify::Center)
+                    .ColorAndOpacity(FSlateColor(EStyleColor::ForegroundHeader))
+                ];
+            }
+
+            FilterList->Invalidate(EInvalidateWidgetReason::Layout);
+        };
+
+        Dialog->SetContent(
+            SNew(SBorder)
+            .Padding(12.0f)
+            [
+                SNew(SVerticalBox)
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                [
+                    SNew(STextBlock)
+                    .Text(FText::Format(
+                        LOCTEXT(
+                            "FilterManagerDescription",
+                            "Manage filters available for {0}. Drag rows to change the filter-button order for this Actor class. All remains after the editable filters."),
+                        Context->GetSelectionLabel()))
+                    .AutoWrapText(true)
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(0.0f, 10.0f, 0.0f, 0.0f)
+                [
+                    SNew(SSearchBox)
+                    .HintText(LOCTEXT("FilterManagerSearchHint", "Search filters"))
+                    .OnTextChanged_Lambda([&ManagerSearchText, &DraggedFilterIndex, &DropTargetFilterIndex, &DropTargetFilterZone, &RebuildFilterList](const FText& NewText)
+                    {
+                        ManagerSearchText = NewText.ToString();
+                        DraggedFilterIndex.Reset();
+                        DropTargetFilterIndex.Reset();
+                        DropTargetFilterZone.Reset();
+                        RebuildFilterList();
+                    })
+                    .ToolTipText(LOCTEXT("FilterManagerSearchTooltip", "Search filter names, descriptions, and scope. Clear the search to reorder filter buttons."))
+                ]
+
+                + SVerticalBox::Slot()
+                .FillHeight(1.0f)
+                .Padding(0.0f, 8.0f, 0.0f, 10.0f)
+                [
+                    SNew(SBorder)
+                    .BorderImage(FAppStyle::Get().GetBrush("Brushes.Panel"))
+                    .Padding(4.0f)
+                    [
+                        SNew(SScrollBox)
+                        + SScrollBox::Slot()
+                        [
+                            SAssignNew(FilterList, SDragAndDropVerticalBox)
+                            .OnDragDetected_Lambda(
+                                [&ManagerSearchText, &DraggedFilterIndex, &DropTargetFilterIndex, &DropTargetFilterZone, &FilterList](
+                                    const FGeometry&,
+                                    const FPointerEvent&,
+                                    int32 SourceIndex,
+                                    SVerticalBox::FSlot* SourceSlot)
+                                {
+                                    if (!ManagerSearchText.TrimStartAndEnd().IsEmpty())
+                                    {
+                                        return FReply::Unhandled();
+                                    }
+
+                                    DraggedFilterIndex = SourceIndex;
+                                    DropTargetFilterIndex.Reset();
+                                    DropTargetFilterZone.Reset();
+                                    if (FilterList.IsValid())
+                                    {
+                                        FilterList->Invalidate(EInvalidateWidgetReason::Paint);
+                                    }
+
+                                    TSharedRef<FDragAndDropVerticalBoxOp> DragOp =
+                                        MakeShared<FDragAndDropVerticalBoxOp>();
+                                    DragOp->SlotIndexBeingDragged = SourceIndex;
+                                    DragOp->SlotBeingDragged = SourceSlot;
+                                    return FReply::Handled().BeginDragDrop(DragOp);
+                                })
+                            .OnDragEnter_Lambda(
+                                [&DraggedFilterIndex, &FilterList](const FDragDropEvent& DragDropEvent)
+                                {
+                                    const TSharedPtr<FDragAndDropVerticalBoxOp> DragOp =
+                                        DragDropEvent.GetOperationAs<FDragAndDropVerticalBoxOp>();
+                                    if (DragOp.IsValid())
+                                    {
+                                        DraggedFilterIndex = DragOp->SlotIndexBeingDragged;
+                                        if (FilterList.IsValid())
+                                        {
+                                            FilterList->Invalidate(EInvalidateWidgetReason::Paint);
+                                        }
+                                    }
+                                })
+                            .OnDragLeave_Lambda(
+                                [&DraggedFilterIndex, &DropTargetFilterIndex, &DropTargetFilterZone, &FilterList](const FDragDropEvent&)
+                                {
+                                    DraggedFilterIndex.Reset();
+                                    DropTargetFilterIndex.Reset();
+                                    DropTargetFilterZone.Reset();
+                                    if (FilterList.IsValid())
+                                    {
+                                        FilterList->Invalidate(EInvalidateWidgetReason::Paint);
+                                    }
+                                })
+                            .OnCanAcceptDropAdvanced_Lambda(
+                                [&ManagerSearchText, &DropTargetFilterIndex, &DropTargetFilterZone, &FilterList](
+                                    const FDragDropEvent& DragDropEvent,
+                                    SDragAndDropVerticalBox::EItemDropZone DropZone,
+                                    int32 TargetIndex,
+                                    SVerticalBox::FSlot*) -> TOptional<SDragAndDropVerticalBox::EItemDropZone>
+                                {
+                                    const TSharedPtr<FDragAndDropVerticalBoxOp> DragOp =
+                                        DragDropEvent.GetOperationAs<FDragAndDropVerticalBoxOp>();
+                                    if (!ManagerSearchText.TrimStartAndEnd().IsEmpty()
+                                        || !DragOp.IsValid()
+                                        || DragOp->SlotIndexBeingDragged == TargetIndex)
+                                    {
+                                        DropTargetFilterIndex.Reset();
+                                        DropTargetFilterZone.Reset();
+                                        if (FilterList.IsValid())
+                                        {
+                                            FilterList->Invalidate(EInvalidateWidgetReason::Paint);
+                                        }
+                                        return TOptional<SDragAndDropVerticalBox::EItemDropZone>();
+                                    }
+
+                                    DropTargetFilterIndex = TargetIndex;
+                                    DropTargetFilterZone = DropZone;
+                                    if (FilterList.IsValid())
+                                    {
+                                        FilterList->Invalidate(EInvalidateWidgetReason::Paint);
+                                    }
+                                    return DropZone;
+                                })
+                            .OnAcceptDrop_Lambda(
+                                [State, Context, WeakDialog, &ManagerSearchText, &WorkingFilters, &DraggedFilterIndex, &DropTargetFilterIndex, &DropTargetFilterZone, &RebuildFilterList, &FilterList](
+                                    const FDragDropEvent& DragDropEvent,
+                                    SDragAndDropVerticalBox::EItemDropZone DropZone,
+                                    int32 TargetIndex,
+                                    SVerticalBox::FSlot*)
+                                {
+                                    if (!ManagerSearchText.TrimStartAndEnd().IsEmpty())
+                                    {
+                                        return FReply::Unhandled();
+                                    }
+
+                                    const TSharedPtr<FDragAndDropVerticalBoxOp> DragOp =
+                                        DragDropEvent.GetOperationAs<FDragAndDropVerticalBoxOp>();
+                                    if (!DragOp.IsValid())
+                                    {
+                                        return FReply::Unhandled();
+                                    }
+
+                                    const int32 SourceIndex = DragOp->SlotIndexBeingDragged;
+                                    if (!WorkingFilters.IsValidIndex(SourceIndex)
+                                        || !WorkingFilters.IsValidIndex(TargetIndex))
+                                    {
+                                        return FReply::Unhandled();
+                                    }
+
+                                    FPruneManagedFilterInfo MovingFilter = WorkingFilters[SourceIndex];
+                                    WorkingFilters.RemoveAt(SourceIndex);
+
+                                    int32 InsertIndex = TargetIndex;
+                                    if (SourceIndex < TargetIndex)
+                                    {
+                                        --InsertIndex;
+                                    }
+                                    if (DropZone == SDragAndDropVerticalBox::EItemDropZone::BelowItem)
+                                    {
+                                        ++InsertIndex;
+                                    }
+                                    InsertIndex = FMath::Clamp(InsertIndex, 0, WorkingFilters.Num());
+                                    WorkingFilters.Insert(MoveTemp(MovingFilter), InsertIndex);
+
+                                    TArray<FString> OrderedKeys;
+                                    OrderedKeys.Reserve(WorkingFilters.Num());
+                                    for (const FPruneManagedFilterInfo& Filter : WorkingFilters)
+                                    {
+                                        OrderedKeys.Add(Filter.OrderKey);
+                                    }
+                                    State->SetFilterButtonOrder(Context.ToSharedRef(), OrderedKeys);
+
+                                    DraggedFilterIndex.Reset();
+                                    DropTargetFilterIndex.Reset();
+                                    DropTargetFilterZone.Reset();
+
+                                    // Rebuild after SDragAndDropVerticalBox finishes its OnDrop call.
+                                    // Replacing child slots synchronously here can leave the manager
+                                    // painting cached slot geometry until the modal closes.
+                                    if (const TSharedPtr<SWindow> ManagerWindow = WeakDialog.Pin())
+                                    {
+                                        ManagerWindow->RegisterActiveTimer(
+                                            0.0f,
+                                            FWidgetActiveTimerDelegate::CreateLambda(
+                                                [State, Context, &WorkingFilters, &RebuildFilterList, &FilterList](double, float)
+                                                {
+                                                    WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                                    RebuildFilterList();
+                                                    if (FilterList.IsValid())
+                                                    {
+                                                        FilterList->Invalidate(EInvalidateWidgetReason::Layout);
+                                                    }
+                                                    return EActiveTimerReturnType::Stop;
+                                                }));
+                                    }
+                                    else
+                                    {
+                                        WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                        RebuildFilterList();
+                                    }
+
+                                    return FReply::Handled();
+                                })
+                        ]
+                    ]
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                [
+                    SNew(SHorizontalBox)
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    [
+                        SNew(SButton)
+                        .Text(LOCTEXT("ManagerNewFilter", "New Filter..."))
+                        .OnClicked_Lambda([State, Context, &WorkingFilters, &RebuildFilterList]()
+                        {
+                            FPruneFilterEditorData InitialData;
+                            InitialData.bGlobal = false;
+                            InitialData.ScopeClassName = Context->GetActorClassName();
+
+                            const TOptional<FFilterEditorResult> Result = ShowFilterEditor(
+                                Context.ToSharedRef(),
+                                InitialData,
+                                true,
+                                false);
+                            if (Result.IsSet())
+                            {
+                                HandleEditorResult(
+                                    State.ToSharedRef(),
+                                    Context.ToSharedRef(),
+                                    nullptr,
+                                    Result.GetValue());
+                                WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                RebuildFilterList();
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(SButton)
+                        .Text(LOCTEXT("ManagerResetOrder", "Reset Button Order"))
+                        .ToolTipText(LOCTEXT("ManagerResetOrderTooltip", "Restore Unreal's normal filter-button order for this Actor class."))
+                        .IsEnabled_Lambda([State, Context]()
+                        {
+                            return State->HasCustomFilterButtonOrder(Context.ToSharedRef());
+                        })
+                        .OnClicked_Lambda([State, Context, &WorkingFilters, &RebuildFilterList]()
+                        {
+                            State->SetFilterButtonOrder(Context.ToSharedRef(), TArray<FString>());
+                            WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                            RebuildFilterList();
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(SButton)
+                        .Text(LOCTEXT("ManagerSettings", "Settings..."))
+                        .ToolTipText(LOCTEXT("ManagerSettingsTooltip", "Open Project Settings > Plugins > Prune."))
+                        .OnClicked_Lambda([]()
+                        {
+                            ISettingsModule& SettingsModule =
+                                FModuleManager::LoadModuleChecked<ISettingsModule>(TEXT("Settings"));
+                            SettingsModule.ShowViewer(TEXT("Project"), TEXT("Plugins"), TEXT("Prune"));
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .FillWidth(1.0f)
+                    .VAlign(VAlign_Center)
+                    .Padding(10.0f, 0.0f)
+                    [
+                        SNew(STextBlock)
+                        .Text_Lambda([State, Context]()
+                        {
+                            return State->HasCustomFilterButtonOrder(Context.ToSharedRef())
+                                ? LOCTEXT("ManagerImmediateCustomOrder", "Custom button order | Changes apply immediately")
+                                : LOCTEXT("ManagerImmediateNativeOrder", "Unreal button order | Changes apply immediately");
+                        })
+                        .TextStyle(FAppStyle::Get(), "SmallText")
+                        .Justification(ETextJustify::Right)
+                        .ColorAndOpacity(FSlateColor(EStyleColor::ForegroundHeader))
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    [
+                        SNew(SButton)
+                        .Text(LOCTEXT("DoneFilterManager", "Done"))
+                        .ToolTipText(LOCTEXT("DoneFilterManagerTooltip", "Close the manager. Filter changes are applied immediately."))
+                        .OnClicked_Lambda([Dialog]()
+                        {
+                            Dialog->RequestDestroyWindow();
+                            return FReply::Handled();
+                        })
+                    ]
+                ]
+            ]);
+
+        RebuildFilterList();
+        if (FilterList.IsValid())
+        {
+            const FSlateColorBrush TransparentDropIndicatorBrush{ FLinearColor::Transparent };
+            FilterList->SetDropIndicator_Above(TransparentDropIndicatorBrush);
+            FilterList->SetDropIndicator_Below(TransparentDropIndicatorBrush);
+        }
+
+        FSlateApplication::Get().AddModalWindow(
+            Dialog,
+            FSlateApplication::Get().GetActiveTopLevelWindow(),
+            false);
     }
 
     static bool WidgetHasTag(const SWidget& Widget, FName Tag)
@@ -864,52 +2128,87 @@ namespace PruneDetailsCustomizationPrivate
         const TWeakPtr<FPruneState>& WeakState,
         const TWeakPtr<const IDetailsView>& WeakDetailsView)
     {
-        return SNew(SCheckBox)
-            .Style(FAppStyle::Get(), "DetailsView.SectionButton")
-            .IsChecked_Lambda([]()
-            {
-                return ECheckBoxState::Unchecked;
-            })
-            .ToolTipText(LOCTEXT("NewFilterTooltip", "Create a new Prune filter"))
-            .OnCheckStateChanged_Lambda([WeakState, WeakDetailsView](ECheckBoxState)
-            {
-                OpenNewFilterEditor(WeakState, WeakDetailsView);
-            })
+        return SNew(SBox)
+            .WidthOverride(24.0f)
+            .HeightOverride(24.0f)
             [
-                SNew(STextBlock)
-                .TextStyle(FAppStyle::Get(), "SmallText")
-                .Text(FText::FromString(TEXT("+")))
+                SNew(SButton)
+                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                .ContentPadding(2.0f)
+                .HAlign(HAlign_Center)
+                .VAlign(VAlign_Center)
+                .ToolTipText(LOCTEXT("NewFilterTooltip", "Create a new Prune filter"))
+                .OnClicked_Lambda([WeakState, WeakDetailsView]()
+                {
+                    OpenNewFilterEditor(WeakState, WeakDetailsView);
+                    return FReply::Handled();
+                })
+                [
+                    SNew(SBox)
+                    .WidthOverride(16.0f)
+                    .HeightOverride(16.0f)
+                    [
+                        SNew(SImage)
+                        .ColorAndOpacity(FSlateColor::UseForeground())
+                        .Image(FAppStyle::Get().GetBrush("Icons.Plus"))
+                    ]
+                ]
+            ];
+    }
+
+    static TSharedRef<SWidget> BuildManagerButton(
+        const TWeakPtr<FPruneState>& WeakState,
+        const TWeakPtr<const IDetailsView>& WeakDetailsView)
+    {
+        return SNew(SBox)
+            .WidthOverride(24.0f)
+            .HeightOverride(24.0f)
+            [
+                SNew(SButton)
+                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                .ContentPadding(2.0f)
+                .HAlign(HAlign_Center)
+                .VAlign(VAlign_Center)
+                .IsEnabled_Lambda([WeakState, WeakDetailsView]()
+                {
+                    const TSharedPtr<FPruneState> State = WeakState.Pin();
+                    const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+                    if (!State.IsValid() || !DetailsView.IsValid())
+                    {
+                        return false;
+                    }
+                    const TSharedPtr<FPruneLayoutContext> Context =
+                        State->FindLatestLayoutContextForDetailsView(DetailsView);
+                    return Context.IsValid() && Context->GetActorClass() != nullptr;
+                })
+                .ToolTipText(LOCTEXT("FilterManagerTooltip", "Manage Prune filters and reorder filter buttons for this Actor class"))
+                .OnClicked_Lambda([WeakState, WeakDetailsView]()
+                {
+                    OpenFilterManager(WeakState, WeakDetailsView);
+                    return FReply::Handled();
+                })
+                [
+                    SNew(SBox)
+                    .WidthOverride(16.0f)
+                    .HeightOverride(16.0f)
+                    [
+                        SNew(SImage)
+                        .ColorAndOpacity(FSlateColor::UseForeground())
+                        .Image(GetFilterManagerIconBrush())
+                    ]
+                ]
             ];
     }
 
     static TSharedRef<SWidget> BuildFilterGearIcon()
     {
         return SNew(SBox)
-            .WidthOverride(18.0f)
-            .HeightOverride(18.0f)
+            .WidthOverride(16.0f)
+            .HeightOverride(16.0f)
             [
-                SNew(SOverlay)
-
-                + SOverlay::Slot()
-                .HAlign(HAlign_Left)
-                .VAlign(VAlign_Top)
-                [
-                    SNew(SImage)
-                    .Image(FAppStyle::Get().GetBrush("Icons.Filter"))
-                ]
-
-                + SOverlay::Slot()
-                .HAlign(HAlign_Right)
-                .VAlign(VAlign_Bottom)
-                [
-                    SNew(SBox)
-                    .WidthOverride(9.0f)
-                    .HeightOverride(9.0f)
-                    [
-                        SNew(SImage)
-                        .Image(FAppStyle::Get().GetBrush("Icons.Settings"))
-                    ]
-                ]
+                SNew(SImage)
+                .ColorAndOpacity(FSlateColor::UseForeground())
+                .Image(GetFilterEditIconBrush())
             ];
     }
 
@@ -917,49 +2216,56 @@ namespace PruneDetailsCustomizationPrivate
         const TWeakPtr<FPruneState>& WeakState,
         const TWeakPtr<const IDetailsView>& WeakDetailsView)
     {
-        return SNew(SButton)
-            .ButtonStyle(FAppStyle::Get(), "SimpleButton")
-            .ContentPadding(FMargin(4.0f, 2.0f))
-            .IsEnabled_Lambda([WeakState, WeakDetailsView]()
-            {
-                const TSharedPtr<FPruneState> State = WeakState.Pin();
-                const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
-                if (!State.IsValid() || !DetailsView.IsValid())
+        return SNew(SBox)
+            .WidthOverride(24.0f)
+            .HeightOverride(24.0f)
+            [
+                SNew(SButton)
+                .ButtonStyle(FAppStyle::Get(), "SimpleButton")
+                .ContentPadding(2.0f)
+                .HAlign(HAlign_Center)
+                .VAlign(VAlign_Center)
+                .IsEnabled_Lambda([WeakState, WeakDetailsView]()
                 {
-                    return false;
-                }
+                    const TSharedPtr<FPruneState> State = WeakState.Pin();
+                    const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+                    if (!State.IsValid() || !DetailsView.IsValid())
+                    {
+                        return false;
+                    }
 
-                const TSharedPtr<FPruneLayoutContext> Context =
-                    State->FindLatestLayoutContextForDetailsView(DetailsView);
-                return Context.IsValid()
-                    && State->CanEditActiveFilter(Context.ToSharedRef());
-            })
-            .ToolTipText_Lambda([WeakState, WeakDetailsView]()
-            {
-                const TSharedPtr<FPruneState> State = WeakState.Pin();
-                const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
-                if (State.IsValid() && DetailsView.IsValid())
-                {
                     const TSharedPtr<FPruneLayoutContext> Context =
                         State->FindLatestLayoutContextForDetailsView(DetailsView);
-                    FPruneEditableFilter Filter;
-                    if (Context.IsValid()
-                        && State->ResolveSingleActiveFilter(Context.ToSharedRef(), Filter))
+                    return Context.IsValid()
+                        && State->CanEditActiveFilter(Context.ToSharedRef());
+                })
+                .ToolTipText_Lambda([WeakState, WeakDetailsView]()
+                {
+                    const TSharedPtr<FPruneState> State = WeakState.Pin();
+                    const TSharedPtr<const IDetailsView> DetailsView = WeakDetailsView.Pin();
+                    if (State.IsValid() && DetailsView.IsValid())
                     {
-                        return FText::Format(
-                            LOCTEXT("EditFilterTooltipNamed", "Edit filter: {0}"),
-                            Filter.DisplayName);
+                        const TSharedPtr<FPruneLayoutContext> Context =
+                            State->FindLatestLayoutContextForDetailsView(DetailsView);
+                        FPruneEditableFilter Filter;
+                        if (Context.IsValid()
+                            && State->ResolveSingleActiveFilter(Context.ToSharedRef(), Filter))
+                        {
+                            return FText::Format(
+                                LOCTEXT("EditFilterTooltipNamed", "Edit filter: {0}"),
+                                Filter.DisplayName);
+                        }
                     }
-                }
-                return LOCTEXT("EditFilterTooltipDisabled", "Select one editable filter to edit it. All and Ctrl-multiselections cannot be edited.");
-            })
-            .OnClicked_Lambda([WeakState, WeakDetailsView]()
-            {
-                OpenActiveFilterEditor(WeakState, WeakDetailsView);
-                return FReply::Handled();
-            })
-            [
-                BuildFilterGearIcon()
+                    return LOCTEXT("EditFilterTooltipDisabled", "Select one editable filter to edit it. All and Ctrl-multiselections cannot be edited.");
+                })
+                .OnClicked_Lambda([WeakState, WeakDetailsView]()
+                {
+                    OpenActiveFilterEditor(WeakState, WeakDetailsView);
+                    return FReply::Handled();
+                })
+                [
+                    BuildFilterGearIcon()
+                ]
             ];
     }
 
@@ -1065,31 +2371,47 @@ namespace PruneDetailsCustomizationPrivate
 
         const TWeakPtr<const IDetailsView> WeakDetailsView = ConstDetailsView;
 
-        TSharedRef<SHorizontalBox> PruneSectionRow =
-            SNew(SHorizontalBox)
+        TSharedRef<SOverlay> PruneSectionRow =
+            SNew(SOverlay)
             .AddMetaData<FTagMetaData>(PruneSectionRowWrapperTag)
 
-            + SHorizontalBox::Slot()
-            .FillWidth(1.0f)
-            .VAlign(VAlign_Center)
+            + SOverlay::Slot()
+            .HAlign(HAlign_Fill)
+            .VAlign(VAlign_Fill)
             [
-                SectionSelectorRef
+                SNew(SBox)
+                .Padding(FMargin(0.0f, 0.0f, 88.0f, 0.0f))
+                [
+                    SectionSelectorRef
+                ]
             ]
 
-            + SHorizontalBox::Slot()
-            .AutoWidth()
-            .VAlign(VAlign_Center)
-            .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+            + SOverlay::Slot()
+            .HAlign(HAlign_Right)
+            .VAlign(VAlign_Bottom)
             [
-                BuildPlusButton(WeakState, WeakDetailsView)
-            ]
+                SNew(SHorizontalBox)
 
-            + SHorizontalBox::Slot()
-            .AutoWidth()
-            .VAlign(VAlign_Center)
-            .Padding(8.0f, 0.0f, 0.0f, 0.0f)
-            [
-                BuildEditButton(WeakState, WeakDetailsView)
+                + SHorizontalBox::Slot()
+                .AutoWidth()
+                .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+                [
+                    BuildPlusButton(WeakState, WeakDetailsView)
+                ]
+
+                + SHorizontalBox::Slot()
+                .AutoWidth()
+                .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+                [
+                    BuildManagerButton(WeakState, WeakDetailsView)
+                ]
+
+                + SHorizontalBox::Slot()
+                .AutoWidth()
+                .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+                [
+                    BuildEditButton(WeakState, WeakDetailsView)
+                ]
             ];
 
         FilterAreaVBox->InsertSlot(RemovedIndex)
@@ -1104,7 +2426,7 @@ namespace PruneDetailsCustomizationPrivate
         UE_LOG(
             LogPruneDetails,
             Log,
-            TEXT("Prune added + and edit controls beside the native Details SectionView."));
+            TEXT("Prune added +, manager, and edit controls beside the native Details SectionView."));
         return true;
     }
 }

@@ -1,9 +1,9 @@
 {
     "FileVersion": 3,
-    "Version": 13,
-    "VersionName": "0.5.1",
+    "Version": 22,
+    "VersionName": "0.8.1",
     "FriendlyName": "Prune",
-    "Description": "Adds editable Actor Details filters with native section buttons, class or global scope, Epic filter overrides, and per-filter category ordering.",
+    "Description": "Adds editable Actor Details filters with class or global scope, Epic overrides and duplication, category and filter-button ordering, live searchable filter management, active-state feedback, descriptions, and Project Settings.",
     "Category": "Editor",
     "CreatedBy": "Mippi the Dork",
     "CanContainContent": false,

@@ -53,12 +53,29 @@ struct FPruneEditableFilter
 struct FPruneFilterEditorData
 {
     FString Name;
+    FString Description;
     bool bGlobal = false;
     FName ScopeClassName = NAME_None;
     TSet<FName> HiddenCategories;
     TArray<FName> OrderedCategoryIds;
     bool bNativeFilter = false;
     bool bHasNativeOverride = false;
+};
+
+
+struct FPruneManagedFilterInfo
+{
+    FString OrderKey;
+    EPruneFilterKind Kind = EPruneFilterKind::None;
+    FName SectionName = NAME_None;
+    FText DisplayName;
+    FString Description;
+    FString CustomPresetId;
+    FString NativeOverrideId;
+    bool bHasNativeOverride = false;
+    bool bGlobal = false;
+    FName ScopeClassName = NAME_None;
+    int32 NativeOrder = 0;
 };
 
 class FPruneLayoutContext : public TSharedFromThis<FPruneLayoutContext>
@@ -85,6 +102,10 @@ public:
 
     void SetSectionSelectorWidget(const TSharedPtr<SWidget>& InWidget);
     TArray<FString> GetCheckedSectionLabels() const;
+    bool EnsureDefaultSectionSelected();
+    void ApplySectionButtonPresentation(
+        const TArray<FString>& OrderedLabels,
+        const TMap<FString, FText>& DescriptionTooltips);
 
     void LogCurrentCategories() const;
 
@@ -106,6 +127,7 @@ public:
     bool CreatePreset(
         const TSharedRef<FPruneLayoutContext>& Context,
         const FString& PresetName,
+        const FString& Description,
         bool bGlobal,
         const TSet<FName>& HiddenCategories,
         const TArray<FName>& OrderedCategoryIds,
@@ -115,12 +137,17 @@ public:
         const TSharedRef<FPruneLayoutContext>& Context,
         const FString& PresetId,
         const FString& PresetName,
+        const FString& Description,
         bool bGlobal,
         const TSet<FName>& HiddenCategories,
         const TArray<FName>& OrderedCategoryIds,
         FString& OutError);
 
     bool DeletePreset(const FString& PresetId);
+
+    FString MakeSuggestedDuplicateName(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FString& BaseName) const;
 
     bool ResolveSingleActiveFilter(
         const TSharedRef<FPruneLayoutContext>& Context,
@@ -134,6 +161,7 @@ public:
     bool SaveNativeOverride(
         const TSharedRef<FPruneLayoutContext>& Context,
         const FPruneEditableFilter& Filter,
+        const FString& Description,
         bool bGlobal,
         const TSet<FName>& HiddenCategories,
         const TArray<FName>& OrderedCategoryIds,
@@ -145,6 +173,21 @@ public:
         const TSharedRef<FPruneLayoutContext>& Context) const;
 
     TArray<FName> GetActiveCategoryOrder(
+        const TSharedRef<FPruneLayoutContext>& Context) const;
+
+    TArray<FPruneManagedFilterInfo> GetManagedFilters(
+        const TSharedRef<FPruneLayoutContext>& Context) const;
+    bool ResolveManagedFilter(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FString& OrderKey,
+        FPruneEditableFilter& OutFilter) const;
+    void SetFilterButtonOrder(
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const TArray<FString>& OrderedKeys);
+
+    bool HasCustomFilterButtonOrder(
+        const TSharedRef<FPruneLayoutContext>& Context) const;
+    void ApplyFilterBarPresentation(
         const TSharedRef<FPruneLayoutContext>& Context) const;
 
     void RegisterLayoutContext(const TSharedRef<FPruneLayoutContext>& Context);
@@ -166,6 +209,7 @@ private:
     {
         FString Id;
         FString Name;
+        FString Description;
         bool bGlobal = true;
         FName ClassName = NAME_None;
         TSet<FName> HiddenCategories;
@@ -177,6 +221,7 @@ private:
         FString Id;
         FName SectionName = NAME_None;
         FString DisplayName;
+        FString Description;
         int32 SectionOrder = 0;
         bool bGlobal = false;
         FName ClassName = NAME_None;
@@ -204,6 +249,8 @@ private:
     };
 
     static FName MakeSectionName(const FString& PresetId);
+    static FString MakePresetOrderKey(const FString& PresetId);
+    static FString MakeNativeOrderKey(FName SectionName);
     static FString MakeBaselineKey(FName ClassName, FName CategoryId);
 
     void CompactContexts();
@@ -271,6 +318,7 @@ private:
 
     TMap<FString, FPresetData> PresetsById;
     TMap<FString, FNativeOverrideData> NativeOverridesById;
+    TMap<FName, TArray<FString>> FilterButtonOrderByClass;
     TSet<FName> KnownCategoryIds;
     TArray<TWeakPtr<FPruneLayoutContext>> LayoutContexts;
     TArray<FObservedViewOrderState> ObservedViewOrders;

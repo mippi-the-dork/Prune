@@ -10,8 +10,10 @@
 #include "Misc/Guid.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
+#include "PruneSettings.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/SWidget.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Text/STextBlock.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPrune, Log, All);
@@ -27,11 +29,14 @@ namespace PruneStatePrivate
     static const TCHAR* RemovedCategoriesKey = TEXT("RemovedCategoryIds");
     static const TCHAR* CategoryOrderKey = TEXT("CategoryOrder");
     static const TCHAR* NameKey = TEXT("Name");
+    static const TCHAR* DescriptionKey = TEXT("Description");
     static const TCHAR* GlobalKey = TEXT("Global");
     static const TCHAR* ClassNameKey = TEXT("ClassName");
     static const TCHAR* SectionNameKey = TEXT("SectionName");
     static const TCHAR* DisplayNameKey = TEXT("DisplayName");
     static const TCHAR* SectionOrderKey = TEXT("SectionOrder");
+    static const TCHAR* FilterOrderClassesKey = TEXT("FilterOrderClasses");
+    static const TCHAR* FilterOrderKeysKey = TEXT("FilterOrderKeys");
 
     static constexpr int32 FirstPruneSectionOrder = 10000;
 
@@ -43,6 +48,11 @@ namespace PruneStatePrivate
     static FString MakeNativeOverrideSection(const FString& OverrideId)
     {
         return FString::Printf(TEXT("Prune.NativeOverride.%s"), *OverrideId);
+    }
+
+    static FString MakeFilterOrderSection(FName ClassName)
+    {
+        return FString::Printf(TEXT("Prune.FilterOrder.%s"), *ClassName.ToString());
     }
 
     static TArray<FString> NamesToStrings(const TSet<FName>& Names)
@@ -325,6 +335,152 @@ TArray<FString> FPruneLayoutContext::GetCheckedSectionLabels() const
     return Result;
 }
 
+bool FPruneLayoutContext::EnsureDefaultSectionSelected()
+{
+    const TSharedPtr<SWidget> Selector = SectionSelectorWidget.Pin();
+    const TSharedPtr<const IDetailsView> ConstDetailsView = DetailsView.Pin();
+    if (!Selector.IsValid() || !ConstDetailsView.IsValid())
+    {
+        return false;
+    }
+
+    FChildren* Children = Selector->GetChildren();
+    if (Children == nullptr || Children->Num() == 0)
+    {
+        return false;
+    }
+
+    bool bHasCheckedSection = false;
+
+    for (int32 Index = 0; Index < Children->Num(); ++Index)
+    {
+        SWidget& Child = Children->GetChildAt(Index).Get();
+        SCheckBox* CheckBox = PruneStatePrivate::FindCheckBoxRecursive(Child);
+        if (CheckBox != nullptr && CheckBox->IsChecked())
+        {
+            bHasCheckedSection = true;
+            break;
+        }
+    }
+
+    // RebuildSectionSelector only creates children when Unreal has real sections,
+    // and it appends All whenever that section row exists. Preserve any valid
+    // persisted selection and repair only the invalid zero-selection state.
+    if (bHasCheckedSection)
+    {
+        return false;
+    }
+
+    IDetailsView* MutableDetailsView = const_cast<IDetailsView*>(ConstDetailsView.Get());
+    if (!MutableDetailsView->ResetToDefaultSection())
+    {
+        return false;
+    }
+
+    MutableDetailsView->RequestForceRefresh();
+    return true;
+}
+
+void FPruneLayoutContext::ApplySectionButtonPresentation(
+    const TArray<FString>& OrderedLabels,
+    const TMap<FString, FText>& DescriptionTooltips)
+{
+    const TSharedPtr<SWidget> Selector = SectionSelectorWidget.Pin();
+    if (!Selector.IsValid() || Selector->GetType() != FName(TEXT("SWrapBox")))
+    {
+        return;
+    }
+
+    SWrapBox* WrapBox = static_cast<SWrapBox*>(Selector.Get());
+    FChildren* Children = WrapBox->GetChildren();
+    if (Children == nullptr || Children->Num() <= 0)
+    {
+        return;
+    }
+
+    struct FButtonWidget
+    {
+        TSharedPtr<SWidget> Widget;
+        FString Label;
+        int32 OriginalIndex = 0;
+        int32 Rank = MAX_int32;
+    };
+
+    TMap<FString, int32> RankByLabel;
+    for (int32 Index = 0; Index < OrderedLabels.Num(); ++Index)
+    {
+        RankByLabel.FindOrAdd(OrderedLabels[Index]) = Index;
+    }
+
+    TArray<FButtonWidget> Buttons;
+    Buttons.Reserve(Children->Num());
+
+    for (int32 Index = 0; Index < Children->Num(); ++Index)
+    {
+        const TSharedRef<SWidget> Child = Children->GetChildAt(Index);
+        FString Label;
+        if (STextBlock* TextBlock = PruneStatePrivate::FindTextBlockRecursive(Child.Get()))
+        {
+            Label = TextBlock->GetText().ToString();
+        }
+
+        if (const FText* Tooltip = DescriptionTooltips.Find(Label))
+        {
+            Child->SetToolTipText(*Tooltip);
+        }
+
+        FButtonWidget& Item = Buttons.AddDefaulted_GetRef();
+        Item.Widget = Child;
+        Item.Label = Label;
+        Item.OriginalIndex = Index;
+        if (const int32* Rank = RankByLabel.Find(Label))
+        {
+            Item.Rank = *Rank;
+        }
+    }
+
+    TArray<FButtonWidget> SortedButtons = Buttons;
+    SortedButtons.StableSort([](const FButtonWidget& A, const FButtonWidget& B)
+    {
+        const bool bAKnown = A.Rank != MAX_int32;
+        const bool bBKnown = B.Rank != MAX_int32;
+        if (bAKnown != bBKnown)
+        {
+            return bAKnown;
+        }
+        if (bAKnown && A.Rank != B.Rank)
+        {
+            return A.Rank < B.Rank;
+        }
+        return A.OriginalIndex < B.OriginalIndex;
+    });
+
+    bool bOrderChanged = false;
+    for (int32 Index = 0; Index < Buttons.Num(); ++Index)
+    {
+        if (Buttons[Index].Widget != SortedButtons[Index].Widget)
+        {
+            bOrderChanged = true;
+            break;
+        }
+    }
+
+    if (!bOrderChanged)
+    {
+        return;
+    }
+
+    WrapBox->ClearChildren();
+    for (const FButtonWidget& Item : SortedButtons)
+    {
+        WrapBox->AddSlot()
+        [
+            Item.Widget.ToSharedRef()
+        ];
+    }
+    WrapBox->Invalidate(EInvalidateWidgetReason::Layout);
+}
+
 void FPruneLayoutContext::LogCurrentCategories() const
 {
     UE_LOG(
@@ -369,6 +525,7 @@ FPruneState::~FPruneState()
 bool FPruneState::CreatePreset(
     const TSharedRef<FPruneLayoutContext>& Context,
     const FString& PresetName,
+    const FString& Description,
     bool bGlobal,
     const TSet<FName>& HiddenCategories,
     const TArray<FName>& OrderedCategoryIds,
@@ -391,6 +548,7 @@ bool FPruneState::CreatePreset(
     FPresetData Preset;
     Preset.Id = FGuid::NewGuid().ToString(EGuidFormats::Digits);
     Preset.Name = CleanName;
+    Preset.Description = Description.TrimStartAndEnd();
     Preset.bGlobal = bGlobal;
     Preset.ClassName = bGlobal ? NAME_None : Context->GetActorClassName();
     Preset.HiddenCategories = HiddenCategories;
@@ -408,6 +566,7 @@ bool FPruneState::UpdatePreset(
     const TSharedRef<FPruneLayoutContext>& Context,
     const FString& PresetId,
     const FString& PresetName,
+    const FString& Description,
     bool bGlobal,
     const TSet<FName>& HiddenCategories,
     const TArray<FName>& OrderedCategoryIds,
@@ -452,6 +611,7 @@ bool FPruneState::UpdatePreset(
     }
 
     Preset->Name = CleanName;
+    Preset->Description = Description.TrimStartAndEnd();
     Preset->bGlobal = bGlobal;
     Preset->ClassName = NewScopeClassName;
     Preset->HiddenCategories = MoveTemp(MergedHidden);
@@ -477,10 +637,47 @@ bool FPruneState::DeletePreset(const FString& PresetId)
     RemoveCustomSection(*Preset);
     PresetsById.Remove(PresetId);
 
+    const FString RemovedOrderKey = MakePresetOrderKey(PresetId);
+    for (TPair<FName, TArray<FString>>& Entry : FilterButtonOrderByClass)
+    {
+        Entry.Value.Remove(RemovedOrderKey);
+    }
+
     SavePersistentState();
     ResetLiveViewsToAll();
     RefreshDetailsViews();
     return true;
+}
+
+FString FPruneState::MakeSuggestedDuplicateName(
+    const TSharedRef<FPruneLayoutContext>& Context,
+    const FString& BaseName) const
+{
+    FString CleanBaseName = BaseName.TrimStartAndEnd();
+    if (CleanBaseName.IsEmpty())
+    {
+        CleanBaseName = TEXT("Filter");
+    }
+
+    for (int32 CopyIndex = 1; CopyIndex <= 999; ++CopyIndex)
+    {
+        const FString Candidate = CopyIndex == 1
+            ? FString::Printf(TEXT("%s Copy"), *CleanBaseName)
+            : FString::Printf(TEXT("%s Copy %d"), *CleanBaseName, CopyIndex);
+
+        FString Error;
+        if (ValidateCustomPresetName(Context, Candidate, FString(), Error))
+        {
+            return Candidate;
+        }
+    }
+
+    const FString GuidSuffix =
+        FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(8);
+    return FString::Printf(
+        TEXT("%s Copy %s"),
+        *CleanBaseName,
+        *GuidSuffix);
 }
 
 bool FPruneState::ResolveSingleActiveFilter(
@@ -566,6 +763,7 @@ bool FPruneState::BuildEditorData(
         }
 
         OutData.Name = Preset->Name;
+        OutData.Description = Preset->Description;
         OutData.bGlobal = Preset->bGlobal;
         OutData.ScopeClassName = Preset->ClassName;
         OutData.HiddenCategories = Preset->HiddenCategories;
@@ -587,6 +785,7 @@ bool FPruneState::BuildEditorData(
 
     if (Override != nullptr)
     {
+        OutData.Description = Override->Description;
         OutData.bGlobal = Override->bGlobal;
         OutData.ScopeClassName = Override->ClassName;
         OutData.OrderedCategoryIds = Override->OrderedCategoryIds;
@@ -615,6 +814,7 @@ bool FPruneState::BuildEditorData(
 bool FPruneState::SaveNativeOverride(
     const TSharedRef<FPruneLayoutContext>& Context,
     const FPruneEditableFilter& Filter,
+    const FString& Description,
     bool bGlobal,
     const TSet<FName>& HiddenCategories,
     const TArray<FName>& OrderedCategoryIds,
@@ -645,6 +845,7 @@ bool FPruneState::SaveNativeOverride(
         NewOverride.Id = FGuid::NewGuid().ToString(EGuidFormats::Digits);
         NewOverride.SectionName = Filter.SectionName;
         NewOverride.DisplayName = Filter.DisplayName.ToString();
+        NewOverride.Description = Description.TrimStartAndEnd();
         NewOverride.SectionOrder = Filter.SectionOrder;
         NewOverride.bGlobal = bGlobal;
         NewOverride.ClassName = bGlobal ? NAME_None : Context->GetActorClassName();
@@ -659,6 +860,8 @@ bool FPruneState::SaveNativeOverride(
         OutError = TEXT("Prune could not create the Epic filter override.");
         return false;
     }
+
+    Override->Description = Description.TrimStartAndEnd();
 
     const bool bWasGlobal = Override->bGlobal;
     const FName NewScopeClassName = bGlobal
@@ -816,6 +1019,201 @@ TArray<FName> FPruneState::GetActiveCategoryOrder(
     return TArray<FName>();
 }
 
+TArray<FPruneManagedFilterInfo> FPruneState::GetManagedFilters(
+    const TSharedRef<FPruneLayoutContext>& Context) const
+{
+    TArray<FPruneManagedFilterInfo> Result;
+    const UClass* ActorClass = Context->GetActorClass();
+    if (ActorClass == nullptr)
+    {
+        return Result;
+    }
+
+    for (const FSectionDefinition& Section : CollectNativeSections(Context))
+    {
+        FPruneManagedFilterInfo& Info = Result.AddDefaulted_GetRef();
+        Info.OrderKey = MakeNativeOrderKey(Section.Name);
+        Info.Kind = EPruneFilterKind::Native;
+        Info.SectionName = Section.Name;
+        Info.DisplayName = Section.DisplayName;
+        Info.NativeOrder = Section.Order;
+
+        if (const FNativeOverrideData* Override = FindApplicableNativeOverride(Section.Name, ActorClass))
+        {
+            Info.Description = Override->Description;
+            Info.NativeOverrideId = Override->Id;
+            Info.bHasNativeOverride = true;
+            Info.bGlobal = Override->bGlobal;
+            Info.ScopeClassName = Override->ClassName;
+        }
+    }
+
+    for (const TPair<FString, FPresetData>& Entry : PresetsById)
+    {
+        const FPresetData& Preset = Entry.Value;
+        if (!DoesScopeApplyToClass(Preset.bGlobal, Preset.ClassName, ActorClass))
+        {
+            continue;
+        }
+
+        FPruneManagedFilterInfo& Info = Result.AddDefaulted_GetRef();
+        Info.OrderKey = MakePresetOrderKey(Preset.Id);
+        Info.Kind = EPruneFilterKind::Custom;
+        Info.SectionName = MakeSectionName(Preset.Id);
+        Info.DisplayName = FText::FromString(Preset.Name);
+        Info.Description = Preset.Description;
+        Info.CustomPresetId = Preset.Id;
+        Info.bGlobal = Preset.bGlobal;
+        Info.ScopeClassName = Preset.ClassName;
+        Info.NativeOrder = PruneStatePrivate::FirstPruneSectionOrder;
+    }
+
+    TMap<FString, int32> SavedRank;
+    if (const TArray<FString>* SavedOrder = FilterButtonOrderByClass.Find(Context->GetActorClassName()))
+    {
+        for (int32 Index = 0; Index < SavedOrder->Num(); ++Index)
+        {
+            SavedRank.FindOrAdd((*SavedOrder)[Index]) = Index;
+        }
+    }
+
+    Result.StableSort([&SavedRank](const FPruneManagedFilterInfo& A, const FPruneManagedFilterInfo& B)
+    {
+        const int32* ARank = SavedRank.Find(A.OrderKey);
+        const int32* BRank = SavedRank.Find(B.OrderKey);
+        if (ARank != nullptr || BRank != nullptr)
+        {
+            if (ARank == nullptr)
+            {
+                return false;
+            }
+            if (BRank == nullptr)
+            {
+                return true;
+            }
+            if (*ARank != *BRank)
+            {
+                return *ARank < *BRank;
+            }
+        }
+
+        static const FName GeneralName(TEXT("General"));
+        if (A.SectionName == GeneralName || B.SectionName == GeneralName)
+        {
+            return A.SectionName == GeneralName && B.SectionName != GeneralName;
+        }
+
+        if (A.NativeOrder != B.NativeOrder)
+        {
+            return A.NativeOrder < B.NativeOrder;
+        }
+
+        if (A.Kind == EPruneFilterKind::Native && B.Kind == EPruneFilterKind::Native)
+        {
+            return A.SectionName.LexicalLess(B.SectionName);
+        }
+        return A.DisplayName.ToString() < B.DisplayName.ToString();
+    });
+
+    return Result;
+}
+
+bool FPruneState::ResolveManagedFilter(
+    const TSharedRef<FPruneLayoutContext>& Context,
+    const FString& OrderKey,
+    FPruneEditableFilter& OutFilter) const
+{
+    OutFilter = FPruneEditableFilter();
+
+    for (const FPruneManagedFilterInfo& Info : GetManagedFilters(Context))
+    {
+        if (Info.OrderKey != OrderKey)
+        {
+            continue;
+        }
+
+        OutFilter.Kind = Info.Kind;
+        OutFilter.SectionName = Info.SectionName;
+        OutFilter.DisplayName = Info.DisplayName;
+        OutFilter.SectionOrder = Info.NativeOrder;
+        OutFilter.CustomPresetId = Info.CustomPresetId;
+        OutFilter.NativeOverrideId = Info.NativeOverrideId;
+        OutFilter.bHasNativeOverride = Info.bHasNativeOverride;
+        return true;
+    }
+
+    return false;
+}
+
+void FPruneState::SetFilterButtonOrder(
+    const TSharedRef<FPruneLayoutContext>& Context,
+    const TArray<FString>& OrderedKeys)
+{
+    const FName ClassName = Context->GetActorClassName();
+    if (ClassName.IsNone())
+    {
+        return;
+    }
+
+    TArray<FString> CleanOrder;
+    CleanOrder.Reserve(OrderedKeys.Num());
+    for (const FString& Key : OrderedKeys)
+    {
+        if (!Key.IsEmpty())
+        {
+            CleanOrder.AddUnique(Key);
+        }
+    }
+
+    if (CleanOrder.IsEmpty())
+    {
+        FilterButtonOrderByClass.Remove(ClassName);
+    }
+    else
+    {
+        FilterButtonOrderByClass.Add(ClassName, MoveTemp(CleanOrder));
+    }
+
+    SavePersistentState();
+    ApplyFilterBarPresentation(Context);
+}
+
+bool FPruneState::HasCustomFilterButtonOrder(
+    const TSharedRef<FPruneLayoutContext>& Context) const
+{
+    const TArray<FString>* SavedOrder =
+        FilterButtonOrderByClass.Find(Context->GetActorClassName());
+    return SavedOrder != nullptr && !SavedOrder->IsEmpty();
+}
+
+void FPruneState::ApplyFilterBarPresentation(
+    const TSharedRef<FPruneLayoutContext>& Context) const
+{
+    TArray<FString> OrderedLabels;
+    TMap<FString, FText> Tooltips;
+
+    const bool bShowDescriptionTooltips = UPruneSettings::Get()->bShowFilterDescriptionTooltips;
+
+    for (const FPruneManagedFilterInfo& Info : GetManagedFilters(Context))
+    {
+        const FString Label = Info.DisplayName.ToString();
+        OrderedLabels.Add(Label);
+        Tooltips.Add(
+            Label,
+            bShowDescriptionTooltips
+                ? FText::FromString(Info.Description)
+                : FText::GetEmpty());
+    }
+
+    // Always provide an explicit order. With no saved Prune order,
+    // GetManagedFilters returns Unreal's normal section order, which lets Reset
+    // Button Order update the visible row immediately instead of waiting for a
+    // Details rebuild. Helper sections such as Favorites and Modified remain
+    // after All in their native relative order.
+    OrderedLabels.Add(TEXT("All"));
+    Context->ApplySectionButtonPresentation(OrderedLabels, Tooltips);
+}
+
 void FPruneState::RegisterLayoutContext(
     const TSharedRef<FPruneLayoutContext>& Context)
 {
@@ -928,6 +1326,16 @@ void FPruneState::LogCurrentCategories(
 FName FPruneState::MakeSectionName(const FString& PresetId)
 {
     return FName(*FString::Printf(TEXT("Prune_%s"), *PresetId));
+}
+
+FString FPruneState::MakePresetOrderKey(const FString& PresetId)
+{
+    return FString::Printf(TEXT("P:%s"), *PresetId);
+}
+
+FString FPruneState::MakeNativeOrderKey(FName SectionName)
+{
+    return FString::Printf(TEXT("N:%s"), *SectionName.ToString());
 }
 
 FString FPruneState::MakeBaselineKey(FName ClassName, FName CategoryId)
@@ -1555,6 +1963,13 @@ bool FPruneState::TickActiveCategoryOrders(float)
         }
         ProcessedViews.Add(DetailsView.Get());
 
+        if (Context->EnsureDefaultSectionSelected())
+        {
+            continue;
+        }
+
+        ApplyFilterBarPresentation(Context.ToSharedRef());
+
         bool bHasCustomOrder = false;
         const FString Signature = BuildActiveOrderSignature(Context.ToSharedRef(), bHasCustomOrder);
 
@@ -1698,7 +2113,9 @@ void FPruneState::LoadPersistentState()
         const FString SectionName = PruneStatePrivate::MakePresetSection(PresetId);
 
         FString Name;
+        FString Description;
         GConfig->GetString(*SectionName, PruneStatePrivate::NameKey, Name, GEditorPerProjectIni);
+        GConfig->GetString(*SectionName, PruneStatePrivate::DescriptionKey, Description, GEditorPerProjectIni);
         Name = Name.TrimStartAndEnd();
         if (Name.IsEmpty())
         {
@@ -1732,6 +2149,7 @@ void FPruneState::LoadPersistentState()
         FPresetData Preset;
         Preset.Id = PresetId;
         Preset.Name = Name;
+        Preset.Description = Description;
         Preset.bGlobal = bGlobal;
         Preset.ClassName = bGlobal || ClassNameString.IsEmpty()
             ? NAME_None
@@ -1762,12 +2180,14 @@ void FPruneState::LoadPersistentState()
 
         FString SectionNameString;
         FString DisplayName;
+        FString Description;
         FString ClassNameString;
         int32 SectionOrder = 0;
         bool bGlobal = false;
 
         GConfig->GetString(*ConfigSection, PruneStatePrivate::SectionNameKey, SectionNameString, GEditorPerProjectIni);
         GConfig->GetString(*ConfigSection, PruneStatePrivate::DisplayNameKey, DisplayName, GEditorPerProjectIni);
+        GConfig->GetString(*ConfigSection, PruneStatePrivate::DescriptionKey, Description, GEditorPerProjectIni);
         GConfig->GetString(*ConfigSection, PruneStatePrivate::ClassNameKey, ClassNameString, GEditorPerProjectIni);
         GConfig->GetInt(*ConfigSection, PruneStatePrivate::SectionOrderKey, SectionOrder, GEditorPerProjectIni);
         GConfig->GetBool(*ConfigSection, PruneStatePrivate::GlobalKey, bGlobal, GEditorPerProjectIni);
@@ -1788,6 +2208,7 @@ void FPruneState::LoadPersistentState()
         Override.Id = OverrideId;
         Override.SectionName = FName(*SectionNameString);
         Override.DisplayName = DisplayName.IsEmpty() ? SectionNameString : DisplayName;
+        Override.Description = Description;
         Override.SectionOrder = SectionOrder;
         Override.bGlobal = bGlobal;
         Override.ClassName = bGlobal || ClassNameString.IsEmpty()
@@ -1798,6 +2219,42 @@ void FPruneState::LoadPersistentState()
         Override.OrderedCategoryIds = PruneStatePrivate::StringsToOrderedNames(OrderStrings);
 
         NativeOverridesById.Add(Override.Id, MoveTemp(Override));
+    }
+
+    TArray<FString> FilterOrderClassNames;
+    GConfig->GetArray(
+        PruneStatePrivate::RootSection,
+        PruneStatePrivate::FilterOrderClassesKey,
+        FilterOrderClassNames,
+        GEditorPerProjectIni);
+
+    for (const FString& ClassNameValue : FilterOrderClassNames)
+    {
+        const FString TrimmedClassName = ClassNameValue.TrimStartAndEnd();
+        if (TrimmedClassName.IsEmpty())
+        {
+            continue;
+        }
+
+        const FName ClassName(*TrimmedClassName);
+        const FString ConfigSection = PruneStatePrivate::MakeFilterOrderSection(ClassName);
+        TArray<FString> Keys;
+        GConfig->GetArray(
+            *ConfigSection,
+            PruneStatePrivate::FilterOrderKeysKey,
+            Keys,
+            GEditorPerProjectIni);
+
+        TArray<FString> CleanKeys;
+        for (const FString& Key : Keys)
+        {
+            const FString CleanKey = Key.TrimStartAndEnd();
+            if (!CleanKey.IsEmpty())
+            {
+                CleanKeys.AddUnique(CleanKey);
+            }
+        }
+        FilterButtonOrderByClass.Add(ClassName, MoveTemp(CleanKeys));
     }
 }
 
@@ -1823,6 +2280,7 @@ void FPruneState::SavePersistentState() const
         const FString SectionName = PruneStatePrivate::MakePresetSection(Entry.Key);
 
         GConfig->SetString(*SectionName, PruneStatePrivate::NameKey, *Entry.Value.Name, GEditorPerProjectIni);
+        GConfig->SetString(*SectionName, PruneStatePrivate::DescriptionKey, *Entry.Value.Description, GEditorPerProjectIni);
         GConfig->SetBool(*SectionName, PruneStatePrivate::GlobalKey, Entry.Value.bGlobal, GEditorPerProjectIni);
         GConfig->SetString(
             *SectionName,
@@ -1857,6 +2315,7 @@ void FPruneState::SavePersistentState() const
 
         GConfig->SetString(*ConfigSection, PruneStatePrivate::SectionNameKey, *Override.SectionName.ToString(), GEditorPerProjectIni);
         GConfig->SetString(*ConfigSection, PruneStatePrivate::DisplayNameKey, *Override.DisplayName, GEditorPerProjectIni);
+        GConfig->SetString(*ConfigSection, PruneStatePrivate::DescriptionKey, *Override.Description, GEditorPerProjectIni);
         GConfig->SetInt(*ConfigSection, PruneStatePrivate::SectionOrderKey, Override.SectionOrder, GEditorPerProjectIni);
         GConfig->SetBool(*ConfigSection, PruneStatePrivate::GlobalKey, Override.bGlobal, GEditorPerProjectIni);
         GConfig->SetString(
@@ -1879,6 +2338,36 @@ void FPruneState::SavePersistentState() const
             *ConfigSection,
             PruneStatePrivate::CategoryOrderKey,
             PruneStatePrivate::OrderedNamesToStrings(Override.OrderedCategoryIds),
+            GEditorPerProjectIni);
+    }
+
+    TArray<FName> FilterOrderClassNames;
+    FilterButtonOrderByClass.GenerateKeyArray(FilterOrderClassNames);
+    FilterOrderClassNames.Sort([](const FName& A, const FName& B)
+    {
+        return A.LexicalLess(B);
+    });
+
+    TArray<FString> FilterOrderClassStrings;
+    FilterOrderClassStrings.Reserve(FilterOrderClassNames.Num());
+    for (const FName ClassName : FilterOrderClassNames)
+    {
+        FilterOrderClassStrings.Add(ClassName.ToString());
+    }
+
+    GConfig->SetArray(
+        PruneStatePrivate::RootSection,
+        PruneStatePrivate::FilterOrderClassesKey,
+        FilterOrderClassStrings,
+        GEditorPerProjectIni);
+
+    for (const TPair<FName, TArray<FString>>& Entry : FilterButtonOrderByClass)
+    {
+        const FString ConfigSection = PruneStatePrivate::MakeFilterOrderSection(Entry.Key);
+        GConfig->SetArray(
+            *ConfigSection,
+            PruneStatePrivate::FilterOrderKeysKey,
+            Entry.Value,
             GEditorPerProjectIni);
     }
 

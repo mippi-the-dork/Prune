@@ -11,14 +11,21 @@ public class Prune : ModuleRules
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         bUseUnity = false;
 
-        PrivateDependencyModuleNames.AddRange(new string[]
+        PublicDependencyModuleNames.AddRange(new string[]
         {
             "Core",
             "CoreUObject",
+            "DeveloperSettings"
+        });
+
+        PrivateDependencyModuleNames.AddRange(new string[]
+        {
             "Engine",
             "Slate",
             "SlateCore",
             "PropertyEditor",
+            "Projects",
+            "Settings",
             "DetailCustomizations",
             "UnrealEd"
         });
