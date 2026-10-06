@@ -1,9 +1,44 @@
-# Prune 0.8.1
+# Prune 0.9.1
 
 Prune is an Unreal Engine editor plugin for creating and editing category filters in the standard Level Editor Actor Details panel.
 
 Prune works directly with Unreal's native Property Section row, alongside filters such as **General**, **Actor**, **LOD**, **Physics**, **Rendering**, and **All**.
 
+
+## 0.9.1 Release Candidate Polish
+
+- Removed **Settings** from the Filter Manager footer. Project Settings remain available through Prune's other entry points without relying on a modal window to close first.
+- Filter Manager rows now show compact category coverage as `shown/total Categories` alongside Prune/Epic identity, scope, override state, and Active state.
+- Import now validates the Prune export format version before modifying local filters.
+- Empty filter exports, malformed entries, and unsupported/incompatible entries produce explicit feedback instead of silently doing nothing.
+- Partially valid imports still import usable filters and report how many entries were skipped.
+- Existing collision-safe Copy naming remains unchanged when imported filter names already exist.
+- Added final regression coverage for multi-selection, multiple and locked Details panels, PIE/restart persistence, and malformed import files.
+
+## 0.9.0 Portable Filters and Filter Button Context Menus
+
+- Removed the trailing ellipsis from every **Duplicate** action.
+- Added **Import** and **Export** to the Filter Manager.
+- Export writes the custom Prune filters available to the current Actor class to a portable `.prunefilters.json` file.
+- Import reads Prune filter JSON files and creates independent local copies. Global filters remain Global, while class-scoped filters are mapped to the Actor class currently being managed.
+- Name conflicts are handled automatically with Prune's existing collision-free Copy naming.
+- Epic filters are intentionally not exported directly. Duplicate an Epic filter into a custom Prune filter first when it needs to become portable.
+- Added right-click actions directly to editable filter buttons in the Actor Details filter row.
+- Filter button context menus provide **Edit**, **Duplicate**, and access to the **Filter Manager** and **Settings**.
+- Custom Prune filter context menus also provide **Export** and **Delete**.
+- Epic filters with a Prune override provide **Reset** directly from the right-click menu.
+- Existing left-click and Ctrl multi-selection behavior remains owned by Unreal's native filter buttons.
+
+## 0.8.2 Filter Manager Cleanup and Quick Actions
+
+- Removed the redundant button-order/apply-status text from the Filter Manager footer.
+- **New Filter** and **Settings** no longer use trailing ellipses.
+- **Done** remains the manager close action, with a simpler close tooltip.
+- Added **Reset** directly to manager rows for Epic filters that currently have a Prune override. Reset asks for confirmation and restores Epic's original filter definition.
+- Added **Delete** directly to manager rows for custom Prune filters. Delete asks for confirmation before removing the filter.
+- Added a tooltip to **New Filter**.
+- Existing Edit and Duplicate actions remain available, so common filter-management actions no longer require opening the full editor first.
+- Existing live reorder, reset button-order refresh, search, descriptions, Active markers, scopes, duplication, category ordering, and Project Settings remain unchanged.
 
 
 ## 0.8.1 Filter Manager Apply Feedback and Reset Refresh
@@ -15,7 +50,7 @@ Prune works directly with Unreal's native Property Section row, alongside filter
 - **Reset Button Order** is disabled when the current Actor class is already using Unreal's normal filter-button order.
 - Added an **Active** marker in the manager for every currently selected editable filter. This also handles Unreal's Ctrl multi-selection by marking each selected filter.
 - Active filter metadata uses Unreal Accent Blue for quick scanning.
-- Added **Settings...** to the Filter Manager footer for direct access to **Project Settings > Plugins > Prune**.
+- Added **Settings** to the Filter Manager footer for direct access to **Project Settings > Plugins > Prune**.
 - Existing live drag reorder, manager search, duplication, descriptions, scopes, Epic overrides, and category ordering remain unchanged.
 
 ## 0.8.0 Live Filter Manager Reorder and Duplication
@@ -24,9 +59,9 @@ Prune works directly with Unreal's native Property Section row, alongside filter
 - The manager now defers its list rebuild until the next Slate tick, after Unreal's drag widget has finished the drop event and released its cached slot geometry.
 - Added **Search filters** to the Filter Manager. Search matches filter names, descriptions, and scope/type labels.
 - Filter-button dragging is disabled while manager search is active so reorder indices always refer to the complete list.
-- Added **Duplicate...** directly to every Filter Manager row.
+- Added **Duplicate** directly to every Filter Manager row.
 - Epic filters can now be duplicated into new independent Prune filters without creating or modifying an Epic override.
-- **Duplicate...** is also available while editing an Epic filter and carries the currently edited visibility, category order, description, and scope into the new Prune filter.
+- **Duplicate** is also available while editing an Epic filter and carries the currently edited visibility, category order, description, and scope into the new Prune filter.
 - Existing custom-filter duplication, per-class button ordering, descriptions, Project Settings, and Actor Details integration remain unchanged.
 
 ## 0.7.0 Filter Manager, Button Ordering, and Descriptions
@@ -71,7 +106,7 @@ Prune works directly with Unreal's native Property Section row, alongside filter
 
 - Added **Show All** and **Hide All** controls to the category header for fast visibility editing.
 - Added a live `shown / total` category count so large filters are easier to audit.
-- Added **Duplicate...** for custom Prune filters.
+- Added **Duplicate** for custom Prune filters.
 - Duplicating opens a fresh New Filter window prefilled with the current visibility, ordering, and scope instead of silently creating a copy.
 - Duplicate names are suggested safely as `Name Copy`, `Name Copy 2`, and so on without colliding with existing Prune or Epic filter names.
 - Edit window titles now include the filter being edited.
@@ -87,7 +122,7 @@ Prune works directly with Unreal's native Property Section row, alongside filter
 
 ## Filter Row UX
 
-Prune 0.8.1 keeps the compact filter-row controls introduced in 0.5.0 and fixes their interaction, icon, and anchoring behavior:
+Prune 0.9.1 keeps the compact filter-row controls introduced in 0.5.0 and fixes their interaction, icon, and anchoring behavior:
 
 - **+** creates a new filter.
 - **Filter Manager** opens the class-aware filter management window and filter-button reorder list.
@@ -103,6 +138,8 @@ The row is conceptually:
 
 All three controls use Unreal's compact SimpleButton treatment with matching 24x24 footprints and remain anchored to the bottom-right of the section-row area.
 
+Editable filter buttons also support a Prune right-click menu without replacing Unreal's normal left-click selection behavior. The menu exposes filter-specific actions such as Edit, Duplicate, Export, Delete, or Reset where appropriate, plus quick access to Filter Manager and Settings.
+
 ## Filter Manager
 
 The Filter Manager is scoped to the Actor class currently shown in that Details panel. It lists the Epic and Prune filters that are available to that class.
@@ -115,13 +152,15 @@ From the manager you can:
 - search filter names, descriptions, and scope/type labels,
 - edit any listed Epic or Prune filter,
 - duplicate any listed filter into a new Prune filter, including Epic filters,
+- import portable Prune filter JSON files,
+- export the custom Prune filters available to the current Actor class,
 - create a new filter,
 - see Global, Class, Epic, and Epic Override state at a glance,
 - see optional filter descriptions,
 - reset the current class back to Unreal's normal filter-button order immediately,
-- open **Project Settings > Plugins > Prune** directly from **Settings...**.
+- open **Project Settings > Plugins > Prune** directly from **Settings**.
 
-Drag reordering is disabled while the manager search field contains text. Clear the search to restore reorder interaction. Manager changes apply immediately, and the footer communicates whether the current button order is custom or Unreal default.
+Drag reordering is disabled while the manager search field contains text. Clear the search to restore reorder interaction. Manager changes apply immediately. **Done** simply closes the manager.
 
 The **All** button is not manually reordered. Prune keeps it after the editable category filters, while native helper sections such as Favorites and Modified keep their trailing behavior.
 
@@ -164,7 +203,7 @@ Prune stores an override rather than replacing the engine source definition. Nat
 
 An edited Epic filter can be scoped to the current Actor class or made Global. **Reset to Epic Default** removes the applicable Prune override and restores the captured native behavior.
 
-Both custom Prune filters and Epic filters provide **Duplicate...**. Duplicating an Epic filter creates a new independent Prune filter and does not modify the Epic filter or create an override. Duplicate names use a collision-free suggested copy name.
+Both custom Prune filters and Epic filters provide **Duplicate**. Duplicating an Epic filter creates a new independent Prune filter and does not modify the Epic filter or create an override. Duplicate names use a collision-free suggested copy name.
 
 **All** is never editable.
 
@@ -199,6 +238,29 @@ The filter is available across Actor classes.
 For custom Prune filters, Global sections are registered on `AActor`.
 
 For Epic-filter overrides, Prune applies the same saved override lazily to each encountered Actor class. This avoids replacing Unreal's global section registry and keeps the engine-owned section definition available underneath the override.
+
+## Portable Filter Import and Export
+
+The Filter Manager can save custom Prune filters to a portable `.prunefilters.json` file and import them later.
+
+Export includes:
+
+- filter name,
+- description,
+- Global or Class scope,
+- hidden category IDs,
+- category order.
+
+Exports contain custom Prune filters only. Epic filter definitions and Epic overrides are not exported directly because those definitions are engine-owned. Use **Duplicate** to turn an Epic filter into an independent Prune filter before exporting it.
+
+When importing:
+
+- Global filters remain Global,
+- class-scoped filters are mapped to the Actor class currently open in the Filter Manager,
+- name collisions receive Prune's normal `Copy`, `Copy 2`, and similar collision-free names,
+- imported filters receive new internal IDs and do not overwrite the source filters.
+
+This provides a simple way to move filter presets between projects or share curated filters with teammates without coupling the file to a specific Prune installation.
 
 ## Native Filter Row Integration
 

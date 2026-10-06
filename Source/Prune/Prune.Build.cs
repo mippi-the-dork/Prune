@@ -20,7 +20,10 @@ public class Prune : ModuleRules
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
+            "DesktopPlatform",
             "Engine",
+            "InputCore",
+            "Json",
             "Slate",
             "SlateCore",
             "PropertyEditor",

@@ -4,19 +4,28 @@
 
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
+#include "DesktopPlatformModule.h"
+#include "Dom/JsonObject.h"
 #include "Engine/World.h"
 #include "Brushes/SlateColorBrush.h"
 #include "Brushes/SlateImageBrush.h"
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
+#include "IDesktopPlatform.h"
 #include "ISettingsModule.h"
+#include "InputCoreTypes.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Framework/Commands/UIAction.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "IDetailsView.h"
+#include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "PruneState.h"
 #include "PruneSettings.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
 #include "Types/ISlateMetaData.h"
@@ -715,7 +724,7 @@ namespace PruneDetailsCustomizationPrivate
             .Padding(0.0f, 0.0f, 6.0f, 0.0f)
             [
                 SNew(SButton)
-                .Text(LOCTEXT("DuplicateFilter", "Duplicate..."))
+                .Text(LOCTEXT("DuplicateFilter", "Duplicate"))
                 .ToolTipText(LOCTEXT(
                     "DuplicateFilterTooltip",
                     "Open a new filter prefilled with the current visibility, order, and scope."))
@@ -748,7 +757,7 @@ namespace PruneDetailsCustomizationPrivate
             .Padding(0.0f, 0.0f, 6.0f, 0.0f)
             [
                 SNew(SButton)
-                .Text(LOCTEXT("DuplicateEpicFilter", "Duplicate..."))
+                .Text(LOCTEXT("DuplicateEpicFilter", "Duplicate"))
                 .ToolTipText(LOCTEXT(
                     "DuplicateEpicFilterTooltip",
                     "Create a new Prune filter from this Epic filter without changing the Epic filter itself."))
@@ -1419,33 +1428,510 @@ namespace PruneDetailsCustomizationPrivate
         OpenSpecificFilterEditor(State.ToSharedRef(), Context.ToSharedRef(), Filter);
     }
 
-    static FText BuildManagedFilterMetaText(const FPruneManagedFilterInfo& Info)
+    static FText BuildManagedFilterMetaText(
+        const FPruneManagedFilterInfo& Info,
+        int32 VisibleCategoryCount,
+        int32 TotalCategoryCount)
     {
+        const FText CategoryText = TotalCategoryCount > 0
+            ? FText::Format(
+                LOCTEXT("ManagedFilterCategoryCount", "{0}/{1} Categories"),
+                FText::AsNumber(VisibleCategoryCount),
+                FText::AsNumber(TotalCategoryCount))
+            : LOCTEXT("ManagedFilterNoCategories", "0 Categories");
+
         if (Info.Kind == EPruneFilterKind::Native)
         {
             if (!Info.bHasNativeOverride)
             {
-                return LOCTEXT("ManagedFilterEpic", "Epic");
+                return FText::Format(
+                    LOCTEXT("ManagedFilterEpic", "Epic | {0}"),
+                    CategoryText);
             }
 
             if (Info.bGlobal)
             {
-                return LOCTEXT("ManagedFilterEpicGlobal", "Epic Override | Global");
+                return FText::Format(
+                    LOCTEXT("ManagedFilterEpicGlobal", "Epic Override | Global | {0}"),
+                    CategoryText);
             }
 
             return FText::Format(
-                LOCTEXT("ManagedFilterEpicClass", "Epic Override | Class: {0}"),
-                FText::FromName(Info.ScopeClassName));
+                LOCTEXT("ManagedFilterEpicClass", "Epic Override | Class: {0} | {1}"),
+                FText::FromName(Info.ScopeClassName),
+                CategoryText);
         }
 
         if (Info.bGlobal)
         {
-            return LOCTEXT("ManagedFilterPruneGlobal", "Prune | Global");
+            return FText::Format(
+                LOCTEXT("ManagedFilterPruneGlobal", "Prune | Global | {0}"),
+                CategoryText);
         }
 
         return FText::Format(
-            LOCTEXT("ManagedFilterPruneClass", "Prune | Class: {0}"),
-            FText::FromName(Info.ScopeClassName));
+            LOCTEXT("ManagedFilterPruneClass", "Prune | Class: {0} | {1}"),
+            FText::FromName(Info.ScopeClassName),
+            CategoryText);
+    }
+
+
+    static TArray<TSharedPtr<FJsonValue>> NamesToJsonArray(const TSet<FName>& Names)
+    {
+        TArray<FString> SortedNames;
+        SortedNames.Reserve(Names.Num());
+        for (const FName Name : Names)
+        {
+            if (!Name.IsNone())
+            {
+                SortedNames.Add(Name.ToString());
+            }
+        }
+        SortedNames.Sort();
+
+        TArray<TSharedPtr<FJsonValue>> Values;
+        Values.Reserve(SortedNames.Num());
+        for (const FString& Name : SortedNames)
+        {
+            Values.Add(MakeShared<FJsonValueString>(Name));
+        }
+        return Values;
+    }
+
+    static TArray<TSharedPtr<FJsonValue>> OrderedNamesToJsonArray(const TArray<FName>& Names)
+    {
+        TArray<TSharedPtr<FJsonValue>> Values;
+        Values.Reserve(Names.Num());
+        for (const FName Name : Names)
+        {
+            if (!Name.IsNone())
+            {
+                Values.Add(MakeShared<FJsonValueString>(Name.ToString()));
+            }
+        }
+        return Values;
+    }
+
+    static void JsonArrayToNames(
+        const TSharedPtr<FJsonObject>& Object,
+        const TCHAR* FieldName,
+        TSet<FName>& OutNames)
+    {
+        OutNames.Reset();
+        const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+        if (!Object.IsValid() || !Object->TryGetArrayField(FieldName, Values) || Values == nullptr)
+        {
+            return;
+        }
+
+        for (const TSharedPtr<FJsonValue>& Value : *Values)
+        {
+            FString Text;
+            if (Value.IsValid() && Value->TryGetString(Text))
+            {
+                Text = Text.TrimStartAndEnd();
+                if (!Text.IsEmpty())
+                {
+                    OutNames.Add(FName(*Text));
+                }
+            }
+        }
+    }
+
+    static void JsonArrayToOrderedNames(
+        const TSharedPtr<FJsonObject>& Object,
+        const TCHAR* FieldName,
+        TArray<FName>& OutNames)
+    {
+        OutNames.Reset();
+        const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+        if (!Object.IsValid() || !Object->TryGetArrayField(FieldName, Values) || Values == nullptr)
+        {
+            return;
+        }
+
+        for (const TSharedPtr<FJsonValue>& Value : *Values)
+        {
+            FString Text;
+            if (Value.IsValid() && Value->TryGetString(Text))
+            {
+                Text = Text.TrimStartAndEnd();
+                if (!Text.IsEmpty())
+                {
+                    OutNames.AddUnique(FName(*Text));
+                }
+            }
+        }
+    }
+
+    static bool ExportManagedFiltersToFile(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const TArray<FPruneManagedFilterInfo>& Filters,
+        const FString& Filename,
+        int32& OutExportedCount,
+        FString& OutError)
+    {
+        OutExportedCount = 0;
+        OutError.Reset();
+
+        TArray<TSharedPtr<FJsonValue>> FilterValues;
+        for (const FPruneManagedFilterInfo& Info : Filters)
+        {
+            if (Info.Kind != EPruneFilterKind::Custom)
+            {
+                continue;
+            }
+
+            FPruneEditableFilter Filter;
+            FPruneFilterEditorData Data;
+            if (!State->ResolveManagedFilter(Context, Info.OrderKey, Filter)
+                || !State->BuildEditorData(Context, Filter, Data))
+            {
+                continue;
+            }
+
+            TSharedRef<FJsonObject> FilterObject = MakeShared<FJsonObject>();
+            FilterObject->SetStringField(TEXT("Name"), Data.Name);
+            FilterObject->SetStringField(TEXT("Description"), Data.Description);
+            FilterObject->SetBoolField(TEXT("Global"), Data.bGlobal);
+            FilterObject->SetStringField(
+                TEXT("SourceScopeClass"),
+                Data.bGlobal ? FString() : Data.ScopeClassName.ToString());
+            FilterObject->SetArrayField(
+                TEXT("HiddenCategories"),
+                NamesToJsonArray(Data.HiddenCategories));
+            FilterObject->SetArrayField(
+                TEXT("CategoryOrder"),
+                OrderedNamesToJsonArray(Data.OrderedCategoryIds));
+
+            FilterValues.Add(MakeShared<FJsonValueObject>(FilterObject));
+            ++OutExportedCount;
+        }
+
+        if (OutExportedCount == 0)
+        {
+            OutError = TEXT("There are no custom Prune filters to export.");
+            return false;
+        }
+
+        TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
+        RootObject->SetStringField(TEXT("Format"), TEXT("PruneFilters"));
+        RootObject->SetNumberField(TEXT("FormatVersion"), 1);
+        RootObject->SetStringField(TEXT("PluginVersion"), TEXT("0.9.1"));
+        RootObject->SetArrayField(TEXT("Filters"), MoveTemp(FilterValues));
+
+        FString JsonText;
+        const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonText);
+        if (!FJsonSerializer::Serialize(RootObject, Writer))
+        {
+            OutError = TEXT("Prune could not serialize the filter file.");
+            return false;
+        }
+
+        if (!FFileHelper::SaveStringToFile(JsonText, *Filename))
+        {
+            OutError = FString::Printf(TEXT("Prune could not write '%s'."), *Filename);
+            return false;
+        }
+
+        return true;
+    }
+
+    static bool ShowExportFilterDialog(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const TArray<FPruneManagedFilterInfo>& Filters)
+    {
+        IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+        if (DesktopPlatform == nullptr)
+        {
+            FMessageDialog::Open(
+                EAppMsgType::Ok,
+                LOCTEXT("ExportDesktopPlatformUnavailable", "The desktop file dialog is unavailable."));
+            return false;
+        }
+
+        TArray<FString> Filenames;
+        const void* ParentWindowHandle =
+            FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr);
+
+        if (!DesktopPlatform->SaveFileDialog(
+                ParentWindowHandle,
+                TEXT("Export Prune Filters"),
+                FPaths::ProjectDir(),
+                TEXT("PruneFilters.prunefilters.json"),
+                TEXT("Prune Filter Files (*.prunefilters.json)|*.prunefilters.json|JSON Files (*.json)|*.json"),
+                EFileDialogFlags::None,
+                Filenames)
+            || Filenames.IsEmpty())
+        {
+            return false;
+        }
+
+        FString Filename = Filenames[0];
+        if (!Filename.EndsWith(TEXT(".json"), ESearchCase::IgnoreCase))
+        {
+            Filename += TEXT(".prunefilters.json");
+        }
+
+        int32 ExportedCount = 0;
+        FString Error;
+        if (!ExportManagedFiltersToFile(
+                State,
+                Context,
+                Filters,
+                Filename,
+                ExportedCount,
+                Error))
+        {
+            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+            return false;
+        }
+
+        FMessageDialog::Open(
+            EAppMsgType::Ok,
+            FText::Format(
+                LOCTEXT("ExportFiltersSuccess", "Exported {0} Prune filter(s)."),
+                FText::AsNumber(ExportedCount)));
+        return true;
+    }
+
+    static bool ImportFiltersFromFile(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FString& Filename,
+        int32& OutImportedCount,
+        int32& OutRenamedCount,
+        int32& OutSkippedCount,
+        FString& OutError)
+    {
+        OutImportedCount = 0;
+        OutRenamedCount = 0;
+        OutSkippedCount = 0;
+        OutError.Reset();
+
+        FString JsonText;
+        if (!FFileHelper::LoadFileToString(JsonText, *Filename))
+        {
+            OutError = FString::Printf(TEXT("Prune could not read '%s'."), *Filename);
+            return false;
+        }
+
+        TSharedPtr<FJsonObject> RootObject;
+        const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
+        if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+        {
+            OutError = TEXT("The selected file is not valid JSON.");
+            return false;
+        }
+
+        FString Format;
+        if (!RootObject->TryGetStringField(TEXT("Format"), Format)
+            || Format != TEXT("PruneFilters"))
+        {
+            OutError = TEXT("The selected file is not a Prune filter export.");
+            return false;
+        }
+
+        double FormatVersion = 0.0;
+        if (!RootObject->TryGetNumberField(TEXT("FormatVersion"), FormatVersion))
+        {
+            OutError = TEXT("The Prune filter export is missing its format version.");
+            return false;
+        }
+
+        if (!FMath::IsNearlyEqual(FormatVersion, 1.0))
+        {
+            OutError = FString::Printf(
+                TEXT("This Prune filter export uses unsupported format version %g. This version of Prune supports format version 1."),
+                FormatVersion);
+            return false;
+        }
+
+        const TArray<TSharedPtr<FJsonValue>>* FilterValues = nullptr;
+        if (!RootObject->TryGetArrayField(TEXT("Filters"), FilterValues)
+            || FilterValues == nullptr)
+        {
+            OutError = TEXT("The Prune filter export does not contain a Filters array.");
+            return false;
+        }
+
+        if (FilterValues->IsEmpty())
+        {
+            OutError = TEXT("The Prune filter export contains no filters to import.");
+            return false;
+        }
+
+        for (const TSharedPtr<FJsonValue>& FilterValue : *FilterValues)
+        {
+            if (!FilterValue.IsValid() || FilterValue->Type != EJson::Object)
+            {
+                ++OutSkippedCount;
+                continue;
+            }
+
+            const TSharedPtr<FJsonObject> FilterObject = FilterValue->AsObject();
+            if (!FilterObject.IsValid())
+            {
+                ++OutSkippedCount;
+                continue;
+            }
+
+            FString Name;
+            if (!FilterObject->TryGetStringField(TEXT("Name"), Name))
+            {
+                ++OutSkippedCount;
+                continue;
+            }
+            Name = Name.TrimStartAndEnd();
+            if (Name.IsEmpty())
+            {
+                ++OutSkippedCount;
+                continue;
+            }
+
+            FString Description;
+            FilterObject->TryGetStringField(TEXT("Description"), Description);
+
+            bool bGlobal = true;
+            FilterObject->TryGetBoolField(TEXT("Global"), bGlobal);
+
+            TSet<FName> HiddenCategories;
+            TArray<FName> OrderedCategoryIds;
+            JsonArrayToNames(FilterObject, TEXT("HiddenCategories"), HiddenCategories);
+            JsonArrayToOrderedNames(FilterObject, TEXT("CategoryOrder"), OrderedCategoryIds);
+
+            FString CreateError;
+            if (!State->CreatePreset(
+                    Context,
+                    Name,
+                    Description,
+                    bGlobal,
+                    HiddenCategories,
+                    OrderedCategoryIds,
+                    CreateError))
+            {
+                const FString Renamed =
+                    State->MakeSuggestedDuplicateName(Context, Name);
+                if (!State->CreatePreset(
+                        Context,
+                        Renamed,
+                        Description,
+                        bGlobal,
+                        HiddenCategories,
+                        OrderedCategoryIds,
+                        CreateError))
+                {
+                    ++OutSkippedCount;
+                    continue;
+                }
+                ++OutRenamedCount;
+            }
+
+            ++OutImportedCount;
+        }
+
+        if (OutImportedCount == 0)
+        {
+            OutError = OutSkippedCount > 0
+                ? FString::Printf(
+                    TEXT("No filters could be imported. %d invalid or incompatible filter entr%s skipped."),
+                    OutSkippedCount,
+                    OutSkippedCount == 1 ? TEXT("y was") : TEXT("ies were"))
+                : TEXT("No filters could be imported from the selected file.");
+            return false;
+        }
+
+        return true;
+    }
+
+    static bool ShowImportFilterDialog(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context)
+    {
+        IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+        if (DesktopPlatform == nullptr)
+        {
+            FMessageDialog::Open(
+                EAppMsgType::Ok,
+                LOCTEXT("ImportDesktopPlatformUnavailable", "The desktop file dialog is unavailable."));
+            return false;
+        }
+
+        TArray<FString> Filenames;
+        const void* ParentWindowHandle =
+            FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr);
+
+        if (!DesktopPlatform->OpenFileDialog(
+                ParentWindowHandle,
+                TEXT("Import Prune Filters"),
+                FPaths::ProjectDir(),
+                TEXT(""),
+                TEXT("Prune Filter Files (*.prunefilters.json)|*.prunefilters.json|JSON Files (*.json)|*.json"),
+                EFileDialogFlags::None,
+                Filenames)
+            || Filenames.IsEmpty())
+        {
+            return false;
+        }
+
+        int32 ImportedCount = 0;
+        int32 RenamedCount = 0;
+        int32 SkippedCount = 0;
+        FString Error;
+        if (!ImportFiltersFromFile(
+                State,
+                Context,
+                Filenames[0],
+                ImportedCount,
+                RenamedCount,
+                SkippedCount,
+                Error))
+        {
+            FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
+            return false;
+        }
+
+        FText ResultText;
+        if (RenamedCount > 0 && SkippedCount > 0)
+        {
+            ResultText = FText::Format(
+                LOCTEXT(
+                    "ImportFiltersSuccessRenamedSkipped",
+                    "Imported {0} Prune filter(s). {1} conflicting name(s) were imported with a Copy name. {2} invalid or incompatible entr{3} skipped."),
+                FText::AsNumber(ImportedCount),
+                FText::AsNumber(RenamedCount),
+                FText::AsNumber(SkippedCount),
+                SkippedCount == 1 ? LOCTEXT("ImportEntrySuffixSingular", "y was") : LOCTEXT("ImportEntrySuffixPlural", "ies were"));
+        }
+        else if (RenamedCount > 0)
+        {
+            ResultText = FText::Format(
+                LOCTEXT(
+                    "ImportFiltersSuccessRenamed",
+                    "Imported {0} Prune filter(s). {1} conflicting name(s) were imported with a Copy name."),
+                FText::AsNumber(ImportedCount),
+                FText::AsNumber(RenamedCount));
+        }
+        else if (SkippedCount > 0)
+        {
+            ResultText = FText::Format(
+                LOCTEXT(
+                    "ImportFiltersSuccessSkipped",
+                    "Imported {0} Prune filter(s). {1} invalid or incompatible entr{2} skipped."),
+                FText::AsNumber(ImportedCount),
+                FText::AsNumber(SkippedCount),
+                SkippedCount == 1 ? LOCTEXT("ImportEntrySuffixSingular2", "y was") : LOCTEXT("ImportEntrySuffixPlural2", "ies were"));
+        }
+        else
+        {
+            ResultText = FText::Format(
+                LOCTEXT("ImportFiltersSuccess", "Imported {0} Prune filter(s)."),
+                FText::AsNumber(ImportedCount));
+        }
+        FMessageDialog::Open(EAppMsgType::Ok, ResultText);
+        return true;
     }
 
     static void OpenFilterManager(
@@ -1523,7 +2009,30 @@ namespace PruneDetailsCustomizationPrivate
             {
                 const FPruneManagedFilterInfo Info = WorkingFilters[Index];
                 const int32 WorkingIndex = Index;
-                const FText MetaText = BuildManagedFilterMetaText(Info);
+
+                const TArray<FName> CurrentCategoryIds = Context->GetCategoryIds();
+                const int32 TotalCategoryCount = CurrentCategoryIds.Num();
+                int32 VisibleCategoryCount = TotalCategoryCount;
+
+                FPruneEditableFilter ManagedFilter;
+                FPruneFilterEditorData ManagedFilterData;
+                if (State->ResolveManagedFilter(Context.ToSharedRef(), Info.OrderKey, ManagedFilter)
+                    && State->BuildEditorData(Context.ToSharedRef(), ManagedFilter, ManagedFilterData))
+                {
+                    VisibleCategoryCount = 0;
+                    for (const FName CategoryId : CurrentCategoryIds)
+                    {
+                        if (!ManagedFilterData.HiddenCategories.Contains(CategoryId))
+                        {
+                            ++VisibleCategoryCount;
+                        }
+                    }
+                }
+
+                const FText MetaText = BuildManagedFilterMetaText(
+                    Info,
+                    VisibleCategoryCount,
+                    TotalCategoryCount);
                 const bool bIsActive = CheckedSectionLabels.Contains(Info.DisplayName.ToString());
                 const FText DisplayMetaText = bIsActive
                     ? FText::Format(
@@ -1679,7 +2188,7 @@ namespace PruneDetailsCustomizationPrivate
                             .Padding(4.0f, 0.0f, 0.0f, 0.0f)
                             [
                                 SNew(SButton)
-                                .Text(LOCTEXT("ManageDuplicateFilter", "Duplicate..."))
+                                .Text(LOCTEXT("ManageDuplicateFilter", "Duplicate"))
                                 .ToolTipText(Info.Kind == EPruneFilterKind::Native
                                     ? LOCTEXT("ManageDuplicateEpicTooltip", "Create a new Prune filter from this Epic filter without changing the Epic filter itself.")
                                     : LOCTEXT("ManageDuplicatePruneTooltip", "Create a new Prune filter prefilled from this filter."))
@@ -1694,6 +2203,73 @@ namespace PruneDetailsCustomizationPrivate
                                             Filter);
                                         WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
                                         RebuildFilterList();
+                                    }
+                                    return FReply::Handled();
+                                })
+                            ]
+
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .VAlign(VAlign_Center)
+                            .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+                            [
+                                SNew(SButton)
+                                .Text(LOCTEXT("ManageResetEpicFilter", "Reset"))
+                                .ToolTipText(LOCTEXT("ManageResetEpicFilterTooltip", "Remove Prune's override and restore this Epic filter to its original definition."))
+                                .Visibility(Info.Kind == EPruneFilterKind::Native && Info.bHasNativeOverride
+                                    ? EVisibility::Visible
+                                    : EVisibility::Collapsed)
+                                .OnClicked_Lambda([State, Context, Info, &WorkingFilters, &RebuildFilterList]()
+                                {
+                                    FPruneEditableFilter Filter;
+                                    if (State->ResolveManagedFilter(Context.ToSharedRef(), Info.OrderKey, Filter)
+                                        && Filter.Kind == EPruneFilterKind::Native
+                                        && Filter.bHasNativeOverride)
+                                    {
+                                        if (FMessageDialog::Open(
+                                            EAppMsgType::YesNo,
+                                            FText::Format(
+                                                LOCTEXT(
+                                                    "ManageResetEpicFilterConfirm",
+                                                    "Reset Epic filter '{0}' to its original definition? This removes Prune's override for this filter."),
+                                                Filter.DisplayName)) == EAppReturnType::Yes)
+                                        {
+                                            State->ResetNativeOverride(Filter);
+                                            WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                            RebuildFilterList();
+                                        }
+                                    }
+                                    return FReply::Handled();
+                                })
+                            ]
+
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .VAlign(VAlign_Center)
+                            .Padding(4.0f, 0.0f, 0.0f, 0.0f)
+                            [
+                                SNew(SButton)
+                                .Text(LOCTEXT("ManageDeletePruneFilter", "Delete"))
+                                .ToolTipText(LOCTEXT("ManageDeletePruneFilterTooltip", "Delete this Prune filter."))
+                                .Visibility(Info.Kind == EPruneFilterKind::Custom
+                                    ? EVisibility::Visible
+                                    : EVisibility::Collapsed)
+                                .OnClicked_Lambda([State, Context, Info, &WorkingFilters, &RebuildFilterList]()
+                                {
+                                    FPruneEditableFilter Filter;
+                                    if (State->ResolveManagedFilter(Context.ToSharedRef(), Info.OrderKey, Filter)
+                                        && Filter.Kind == EPruneFilterKind::Custom)
+                                    {
+                                        if (FMessageDialog::Open(
+                                            EAppMsgType::YesNo,
+                                            FText::Format(
+                                                LOCTEXT("ManageDeletePruneFilterConfirm", "Delete Prune filter '{0}'?"),
+                                                Filter.DisplayName)) == EAppReturnType::Yes)
+                                        {
+                                            State->DeletePreset(Filter.CustomPresetId);
+                                            WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                            RebuildFilterList();
+                                        }
                                     }
                                     return FReply::Handled();
                                 })
@@ -1986,7 +2562,8 @@ namespace PruneDetailsCustomizationPrivate
                     .AutoWidth()
                     [
                         SNew(SButton)
-                        .Text(LOCTEXT("ManagerNewFilter", "New Filter..."))
+                        .Text(LOCTEXT("ManagerNewFilter", "New Filter"))
+                        .ToolTipText(LOCTEXT("ManagerNewFilterTooltip", "Create a new Prune filter."))
                         .OnClicked_Lambda([State, Context, &WorkingFilters, &RebuildFilterList]()
                         {
                             FPruneFilterEditorData InitialData;
@@ -2017,6 +2594,49 @@ namespace PruneDetailsCustomizationPrivate
                     .Padding(6.0f, 0.0f, 0.0f, 0.0f)
                     [
                         SNew(SButton)
+                        .Text(LOCTEXT("ManagerImportFilters", "Import"))
+                        .ToolTipText(LOCTEXT("ManagerImportFiltersTooltip", "Import custom Prune filters from a Prune filter JSON file. Class-scoped filters are mapped to the current Actor class."))
+                        .OnClicked_Lambda([State, Context, &WorkingFilters, &RebuildFilterList]()
+                        {
+                            if (ShowImportFilterDialog(State.ToSharedRef(), Context.ToSharedRef()))
+                            {
+                                WorkingFilters = State->GetManagedFilters(Context.ToSharedRef());
+                                RebuildFilterList();
+                            }
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(SButton)
+                        .Text(LOCTEXT("ManagerExportFilters", "Export"))
+                        .ToolTipText(LOCTEXT("ManagerExportFiltersTooltip", "Export the custom Prune filters available for this Actor class to a portable JSON file. Epic filters are not exported."))
+                        .IsEnabled_Lambda([&WorkingFilters]()
+                        {
+                            return WorkingFilters.ContainsByPredicate(
+                                [](const FPruneManagedFilterInfo& Info)
+                                {
+                                    return Info.Kind == EPruneFilterKind::Custom;
+                                });
+                        })
+                        .OnClicked_Lambda([State, Context, &WorkingFilters]()
+                        {
+                            ShowExportFilterDialog(
+                                State.ToSharedRef(),
+                                Context.ToSharedRef(),
+                                WorkingFilters);
+                            return FReply::Handled();
+                        })
+                    ]
+
+                    + SHorizontalBox::Slot()
+                    .AutoWidth()
+                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
+                    [
+                        SNew(SButton)
                         .Text(LOCTEXT("ManagerResetOrder", "Reset Button Order"))
                         .ToolTipText(LOCTEXT("ManagerResetOrderTooltip", "Restore Unreal's normal filter-button order for this Actor class."))
                         .IsEnabled_Lambda([State, Context]()
@@ -2032,37 +2652,11 @@ namespace PruneDetailsCustomizationPrivate
                         })
                     ]
 
-                    + SHorizontalBox::Slot()
-                    .AutoWidth()
-                    .Padding(6.0f, 0.0f, 0.0f, 0.0f)
-                    [
-                        SNew(SButton)
-                        .Text(LOCTEXT("ManagerSettings", "Settings..."))
-                        .ToolTipText(LOCTEXT("ManagerSettingsTooltip", "Open Project Settings > Plugins > Prune."))
-                        .OnClicked_Lambda([]()
-                        {
-                            ISettingsModule& SettingsModule =
-                                FModuleManager::LoadModuleChecked<ISettingsModule>(TEXT("Settings"));
-                            SettingsModule.ShowViewer(TEXT("Project"), TEXT("Plugins"), TEXT("Prune"));
-                            return FReply::Handled();
-                        })
-                    ]
 
                     + SHorizontalBox::Slot()
                     .FillWidth(1.0f)
-                    .VAlign(VAlign_Center)
-                    .Padding(10.0f, 0.0f)
                     [
-                        SNew(STextBlock)
-                        .Text_Lambda([State, Context]()
-                        {
-                            return State->HasCustomFilterButtonOrder(Context.ToSharedRef())
-                                ? LOCTEXT("ManagerImmediateCustomOrder", "Custom button order | Changes apply immediately")
-                                : LOCTEXT("ManagerImmediateNativeOrder", "Unreal button order | Changes apply immediately");
-                        })
-                        .TextStyle(FAppStyle::Get(), "SmallText")
-                        .Justification(ETextJustify::Right)
-                        .ColorAndOpacity(FSlateColor(EStyleColor::ForegroundHeader))
+                        SNew(SBox)
                     ]
 
                     + SHorizontalBox::Slot()
@@ -2070,7 +2664,7 @@ namespace PruneDetailsCustomizationPrivate
                     [
                         SNew(SButton)
                         .Text(LOCTEXT("DoneFilterManager", "Done"))
-                        .ToolTipText(LOCTEXT("DoneFilterManagerTooltip", "Close the manager. Filter changes are applied immediately."))
+                        .ToolTipText(LOCTEXT("DoneFilterManagerTooltip", "Close the Filter Manager."))
                         .OnClicked_Lambda([Dialog]()
                         {
                             Dialog->RequestDestroyWindow();
@@ -2092,6 +2686,190 @@ namespace PruneDetailsCustomizationPrivate
             Dialog,
             FSlateApplication::Get().GetActiveTopLevelWindow(),
             false);
+    }
+
+
+    static TSharedRef<SWidget> BuildFilterButtonContextMenu(
+        const TSharedRef<FPruneState>& State,
+        const TSharedRef<FPruneLayoutContext>& Context,
+        const FPruneManagedFilterInfo& Info)
+    {
+        FMenuBuilder MenuBuilder(true, nullptr);
+
+        MenuBuilder.BeginSection(
+            TEXT("PruneFilterActions"),
+            LOCTEXT("FilterButtonContextSection", "Prune Filter"));
+        {
+            MenuBuilder.AddMenuEntry(
+                LOCTEXT("FilterButtonContextEdit", "Edit"),
+                LOCTEXT("FilterButtonContextEditTooltip", "Edit this filter's categories, order, description, and scope."),
+                FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([State, Context, Info]()
+                {
+                    FPruneEditableFilter Filter;
+                    if (State->ResolveManagedFilter(Context, Info.OrderKey, Filter))
+                    {
+                        OpenSpecificFilterEditor(State, Context, Filter);
+                    }
+                })));
+
+            MenuBuilder.AddMenuEntry(
+                LOCTEXT("FilterButtonContextDuplicate", "Duplicate"),
+                Info.Kind == EPruneFilterKind::Native
+                    ? LOCTEXT("FilterButtonContextDuplicateEpicTooltip", "Create a new Prune filter from this Epic filter without changing the Epic filter itself.")
+                    : LOCTEXT("FilterButtonContextDuplicatePruneTooltip", "Create a new Prune filter prefilled from this filter."),
+                FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([State, Context, Info]()
+                {
+                    FPruneEditableFilter Filter;
+                    if (State->ResolveManagedFilter(Context, Info.OrderKey, Filter))
+                    {
+                        OpenDuplicateFilterEditor(State, Context, Filter);
+                    }
+                })));
+
+            if (Info.Kind == EPruneFilterKind::Custom)
+            {
+                MenuBuilder.AddMenuEntry(
+                    LOCTEXT("FilterButtonContextExport", "Export"),
+                    LOCTEXT("FilterButtonContextExportTooltip", "Export this Prune filter to a portable JSON file."),
+                    FSlateIcon(),
+                    FUIAction(FExecuteAction::CreateLambda([State, Context, Info]()
+                    {
+                        TArray<FPruneManagedFilterInfo> SingleFilter;
+                        SingleFilter.Add(Info);
+                        ShowExportFilterDialog(State, Context, SingleFilter);
+                    })));
+
+                MenuBuilder.AddMenuEntry(
+                    LOCTEXT("FilterButtonContextDelete", "Delete"),
+                    LOCTEXT("FilterButtonContextDeleteTooltip", "Delete this Prune filter."),
+                    FSlateIcon(),
+                    FUIAction(FExecuteAction::CreateLambda([State, Context, Info]()
+                    {
+                        FPruneEditableFilter Filter;
+                        if (State->ResolveManagedFilter(Context, Info.OrderKey, Filter)
+                            && Filter.Kind == EPruneFilterKind::Custom
+                            && FMessageDialog::Open(
+                                EAppMsgType::YesNo,
+                                FText::Format(
+                                    LOCTEXT("FilterButtonContextDeleteConfirm", "Delete Prune filter '{0}'?"),
+                                    Filter.DisplayName)) == EAppReturnType::Yes)
+                        {
+                            State->DeletePreset(Filter.CustomPresetId);
+                        }
+                    })));
+            }
+            else if (Info.bHasNativeOverride)
+            {
+                MenuBuilder.AddMenuEntry(
+                    LOCTEXT("FilterButtonContextReset", "Reset"),
+                    LOCTEXT("FilterButtonContextResetTooltip", "Remove Prune's override and restore this Epic filter to its original definition."),
+                    FSlateIcon(),
+                    FUIAction(FExecuteAction::CreateLambda([State, Context, Info]()
+                    {
+                        FPruneEditableFilter Filter;
+                        if (State->ResolveManagedFilter(Context, Info.OrderKey, Filter)
+                            && Filter.Kind == EPruneFilterKind::Native
+                            && Filter.bHasNativeOverride
+                            && FMessageDialog::Open(
+                                EAppMsgType::YesNo,
+                                FText::Format(
+                                    LOCTEXT("FilterButtonContextResetConfirm", "Reset Epic filter '{0}' to its original definition?"),
+                                    Filter.DisplayName)) == EAppReturnType::Yes)
+                        {
+                            State->ResetNativeOverride(Filter);
+                        }
+                    })));
+            }
+        }
+        MenuBuilder.EndSection();
+
+        MenuBuilder.BeginSection(
+            TEXT("PruneFilterTools"),
+            LOCTEXT("FilterButtonContextToolsSection", "Prune"));
+        {
+            MenuBuilder.AddMenuEntry(
+                LOCTEXT("FilterButtonContextManager", "Filter Manager"),
+                LOCTEXT("FilterButtonContextManagerTooltip", "Open the Prune Filter Manager for this Actor class."),
+                FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([State, Context]()
+                {
+                    const TWeakPtr<FPruneState> WeakState = State;
+                    const TWeakPtr<const IDetailsView> WeakDetailsView = Context->GetDetailsView();
+                    OpenFilterManager(WeakState, WeakDetailsView);
+                })));
+
+            MenuBuilder.AddMenuEntry(
+                LOCTEXT("FilterButtonContextSettings", "Settings"),
+                LOCTEXT("FilterButtonContextSettingsTooltip", "Open Project Settings > Plugins > Prune."),
+                FSlateIcon(),
+                FUIAction(FExecuteAction::CreateLambda([]()
+                {
+                    ISettingsModule& SettingsModule =
+                        FModuleManager::LoadModuleChecked<ISettingsModule>(TEXT("Settings"));
+                    SettingsModule.ShowViewer(TEXT("Project"), TEXT("Plugins"), TEXT("Prune"));
+                })));
+        }
+        MenuBuilder.EndSection();
+
+        return MenuBuilder.MakeWidget();
+    }
+
+    static void InstallFilterButtonContextMenu(
+        const TWeakPtr<FPruneState>& WeakState,
+        const TWeakPtr<FPruneLayoutContext>& WeakContext)
+    {
+        const TSharedPtr<FPruneLayoutContext> Context = WeakContext.Pin();
+        if (!Context.IsValid())
+        {
+            return;
+        }
+
+        Context->SetFilterButtonContextMenuHandler(
+            [WeakState, WeakContext](const FString& Label, const FVector2D& ScreenPosition)
+            {
+                const TSharedPtr<FPruneState> State = WeakState.Pin();
+                const TSharedPtr<FPruneLayoutContext> LiveContext = WeakContext.Pin();
+                if (!State.IsValid() || !LiveContext.IsValid())
+                {
+                    return;
+                }
+
+                const FPruneManagedFilterInfo* MatchedFilter = nullptr;
+                const TArray<FPruneManagedFilterInfo> ManagedFilters =
+                    State->GetManagedFilters(LiveContext.ToSharedRef());
+                for (const FPruneManagedFilterInfo& Info : ManagedFilters)
+                {
+                    if (Info.DisplayName.ToString() == Label)
+                    {
+                        MatchedFilter = &Info;
+                        break;
+                    }
+                }
+
+                if (MatchedFilter == nullptr)
+                {
+                    return;
+                }
+
+                const TSharedPtr<SWindow> ParentWindow =
+                    FSlateApplication::Get().GetActiveTopLevelWindow();
+                if (!ParentWindow.IsValid())
+                {
+                    return;
+                }
+
+                FSlateApplication::Get().PushMenu(
+                    ParentWindow.ToSharedRef(),
+                    FWidgetPath(),
+                    BuildFilterButtonContextMenu(
+                        State.ToSharedRef(),
+                        LiveContext.ToSharedRef(),
+                        *MatchedFilter),
+                    ScreenPosition,
+                    FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
+            });
     }
 
     static bool WidgetHasTag(const SWidget& Widget, FName Tag)
@@ -2279,6 +3057,8 @@ namespace PruneDetailsCustomizationPrivate
         {
             return false;
         }
+
+        InstallFilterButtonContextMenu(WeakState, WeakLayoutContext);
 
         const TSharedPtr<const IDetailsView> ConstDetailsView = Context->GetDetailsView();
         if (!ConstDetailsView.IsValid())

@@ -4,14 +4,17 @@
 
 #include "DetailCategoryBuilder.h"
 #include "GameFramework/Actor.h"
+#include "InputCoreTypes.h"
 #include "IDetailsView.h"
 #include "Layout/Children.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Guid.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
+#include "Styling/CoreStyle.h"
 #include "PruneSettings.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Layout/SBorder.h"
 #include "Widgets/SWidget.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -39,6 +42,7 @@ namespace PruneStatePrivate
     static const TCHAR* FilterOrderKeysKey = TEXT("FilterOrderKeys");
 
     static constexpr int32 FirstPruneSectionOrder = 10000;
+    static const FName FilterContextWrapperTag(TEXT("Prune.FilterContextWrapper"));
 
     static FString MakePresetSection(const FString& PresetId)
     {
@@ -392,6 +396,7 @@ void FPruneLayoutContext::ApplySectionButtonPresentation(
     }
 
     SWrapBox* WrapBox = static_cast<SWrapBox*>(Selector.Get());
+    const TWeakPtr<FPruneLayoutContext> WeakThis = AsShared();
     FChildren* Children = WrapBox->GetChildren();
     if (Children == nullptr || Children->Num() <= 0)
     {
@@ -402,8 +407,10 @@ void FPruneLayoutContext::ApplySectionButtonPresentation(
     {
         TSharedPtr<SWidget> Widget;
         FString Label;
+        FText Tooltip;
         int32 OriginalIndex = 0;
         int32 Rank = MAX_int32;
+        bool bNeedsContextWrapper = false;
     };
 
     TMap<FString, int32> RankByLabel;
@@ -414,6 +421,7 @@ void FPruneLayoutContext::ApplySectionButtonPresentation(
 
     TArray<FButtonWidget> Buttons;
     Buttons.Reserve(Children->Num());
+    bool bPresentationChanged = false;
 
     for (int32 Index = 0; Index < Children->Num(); ++Index)
     {
@@ -424,18 +432,26 @@ void FPruneLayoutContext::ApplySectionButtonPresentation(
             Label = TextBlock->GetText().ToString();
         }
 
-        if (const FText* Tooltip = DescriptionTooltips.Find(Label))
-        {
-            Child->SetToolTipText(*Tooltip);
-        }
-
         FButtonWidget& Item = Buttons.AddDefaulted_GetRef();
         Item.Widget = Child;
         Item.Label = Label;
         Item.OriginalIndex = Index;
+
         if (const int32* Rank = RankByLabel.Find(Label))
         {
             Item.Rank = *Rank;
+        }
+
+        if (const FText* Tooltip = DescriptionTooltips.Find(Label))
+        {
+            Item.Tooltip = *Tooltip;
+            Child->SetToolTipText(*Tooltip);
+
+            if (Child->GetTag() != PruneStatePrivate::FilterContextWrapperTag)
+            {
+                Item.bNeedsContextWrapper = true;
+                bPresentationChanged = true;
+            }
         }
     }
 
@@ -465,7 +481,7 @@ void FPruneLayoutContext::ApplySectionButtonPresentation(
         }
     }
 
-    if (!bOrderChanged)
+    if (!bOrderChanged && !bPresentationChanged)
     {
         return;
     }
@@ -473,9 +489,41 @@ void FPruneLayoutContext::ApplySectionButtonPresentation(
     WrapBox->ClearChildren();
     for (const FButtonWidget& Item : SortedButtons)
     {
+        TSharedRef<SWidget> PresentedWidget = Item.Widget.ToSharedRef();
+
+        if (Item.bNeedsContextWrapper)
+        {
+            const FString Label = Item.Label;
+            PresentedWidget =
+                SNew(SBorder)
+                .BorderImage(FCoreStyle::Get().GetBrush(TEXT("NoBorder")))
+                .Padding(0.0f)
+                .OnMouseButtonDown_Lambda(
+                    [WeakThis, Label](const FGeometry&, const FPointerEvent& MouseEvent)
+                    {
+                        const TSharedPtr<FPruneLayoutContext> Self = WeakThis.Pin();
+                        if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton
+                            && Self.IsValid()
+                            && Self->FilterButtonContextMenuHandler)
+                        {
+                            Self->FilterButtonContextMenuHandler(
+                                Label,
+                                MouseEvent.GetScreenSpacePosition());
+                            return FReply::Handled();
+                        }
+                        return FReply::Unhandled();
+                    })
+                [
+                    Item.Widget.ToSharedRef()
+                ];
+
+            PresentedWidget->SetTag(PruneStatePrivate::FilterContextWrapperTag);
+            PresentedWidget->SetToolTipText(Item.Tooltip);
+        }
+
         WrapBox->AddSlot()
         [
-            Item.Widget.ToSharedRef()
+            PresentedWidget
         ];
     }
     WrapBox->Invalidate(EInvalidateWidgetReason::Layout);

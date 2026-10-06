@@ -107,6 +107,12 @@ public:
         const TArray<FString>& OrderedLabels,
         const TMap<FString, FText>& DescriptionTooltips);
 
+    void SetFilterButtonContextMenuHandler(
+        TFunction<void(const FString&, const FVector2D&)> InHandler)
+    {
+        FilterButtonContextMenuHandler = MoveTemp(InHandler);
+    }
+
     void LogCurrentCategories() const;
 
 private:
@@ -114,6 +120,7 @@ private:
     TWeakPtr<const IDetailsView> DetailsView;
     TWeakObjectPtr<UClass> ActorClass;
     TWeakPtr<SWidget> SectionSelectorWidget;
+    TFunction<void(const FString&, const FVector2D&)> FilterButtonContextMenuHandler;
     TArray<FPruneCategoryInfo> RawCategories;
     TArray<FPruneCategoryGroupInfo> CategoryGroups;
 };
