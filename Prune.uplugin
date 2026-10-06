@@ -1,13 +1,13 @@
 {
     "FileVersion": 3,
-    "Version": 25,
-    "VersionName": "0.9.1",
+    "Version": 26,
+    "VersionName": "1.0.0",
     "FriendlyName": "Prune",
-    "Description": "Adds editable Actor Details filters with class or global scope, Epic overrides and duplication, category and filter-button ordering, searchable management, portable import/export, right-click filter actions, descriptions, and Project Settings.",
+    "Description": "Create, edit, organize, and share Actor Details category filters directly in Unreal Engine's native Details panel.",
     "Category": "Editor",
     "CreatedBy": "Mippi the Dork",
     "CanContainContent": false,
-    "IsBetaVersion": true,
+    "IsBetaVersion": false,
     "Installed": false,
     "EngineVersion": "5.8.0",
     "SupportedTargetPlatforms": [

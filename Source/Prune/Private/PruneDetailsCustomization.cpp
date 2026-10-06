@@ -1618,7 +1618,7 @@ namespace PruneDetailsCustomizationPrivate
         TSharedRef<FJsonObject> RootObject = MakeShared<FJsonObject>();
         RootObject->SetStringField(TEXT("Format"), TEXT("PruneFilters"));
         RootObject->SetNumberField(TEXT("FormatVersion"), 1);
-        RootObject->SetStringField(TEXT("PluginVersion"), TEXT("0.9.1"));
+        RootObject->SetStringField(TEXT("PluginVersion"), TEXT("1.0.0"));
         RootObject->SetArrayField(TEXT("Filters"), MoveTemp(FilterValues));
 
         FString JsonText;
