@@ -6,7 +6,7 @@ Prune extends the standard Level Editor Actor Details filter row so you can crea
 
 It works directly with Unreal Engine's native Details panel instead of replacing it.
 
-![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.8.0--5.8.3-black?logo=unrealengine)
+![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.8.x-black?logo=unrealengine)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2064--bit-blue)
 ![Type](https://img.shields.io/badge/Plugin-Editor%20Only-green)
 ![Version](https://img.shields.io/badge/Version-1.0.0-blue)
