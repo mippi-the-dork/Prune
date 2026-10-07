@@ -44,6 +44,29 @@ namespace PruneStatePrivate
     static constexpr int32 FirstPruneSectionOrder = 10000;
     static const FName FilterContextWrapperTag(TEXT("Prune.FilterContextWrapper"));
 
+    // Unreal's Property Editor section mapping API only accepts top-level
+    // categories. Detail subcategories use a pipe-delimited path such as
+    // "Omni|Generation" and will assert if passed directly to AddCategory or
+    // RemoveCategory. Preserve the full category id inside Prune, but collapse
+    // it to the root category at the section API boundary.
+    static FName GetSectionCategoryId(FName CategoryId)
+    {
+        if (CategoryId.IsNone())
+        {
+            return NAME_None;
+        }
+
+        FString CategoryString = CategoryId.ToString();
+        int32 SeparatorIndex = INDEX_NONE;
+        if (CategoryString.FindChar(TEXT('|'), SeparatorIndex))
+        {
+            CategoryString = CategoryString.Left(SeparatorIndex);
+        }
+
+        CategoryString.TrimStartAndEndInline();
+        return CategoryString.IsEmpty() ? NAME_None : FName(*CategoryString);
+    }
+
     static FString MakePresetSection(const FString& PresetId)
     {
         return FString::Printf(TEXT("Prune.Preset.%s"), *PresetId);
@@ -1482,10 +1505,18 @@ TArray<FPruneState::FSectionDefinition> FPruneState::CollectNativeSections(
         FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
 
     TMap<FName, FSectionDefinition> SectionsByName;
+    TSet<FName> QueriedSectionCategories;
     for (const FName CategoryId : Context->GetCategoryIds())
     {
+        const FName SectionCategoryId = PruneStatePrivate::GetSectionCategoryId(CategoryId);
+        if (SectionCategoryId.IsNone() || QueriedSectionCategories.Contains(SectionCategoryId))
+        {
+            continue;
+        }
+        QueriedSectionCategories.Add(SectionCategoryId);
+
         const TArray<TSharedPtr<FPropertySection>> Sections =
-            PropertyEditor.FindSectionsForCategory(ActorClass, CategoryId);
+            PropertyEditor.FindSectionsForCategory(ActorClass, SectionCategoryId);
 
         for (const TSharedPtr<FPropertySection>& Section : Sections)
         {
@@ -1599,8 +1630,14 @@ bool FPruneState::IsSectionIncludedForCategory(
     const FPropertyEditorModule& PropertyEditor =
         FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
 
+    const FName SectionCategoryId = PruneStatePrivate::GetSectionCategoryId(CategoryId);
+    if (SectionCategoryId.IsNone())
+    {
+        return false;
+    }
+
     const TArray<TSharedPtr<FPropertySection>> Sections =
-        PropertyEditor.FindSectionsForCategory(ActorClass, CategoryId);
+        PropertyEditor.FindSectionsForCategory(ActorClass, SectionCategoryId);
 
     return Sections.ContainsByPredicate(
         [SectionName](const TSharedPtr<FPropertySection>& Section)
@@ -1718,11 +1755,19 @@ void FPruneState::RebuildCustomSection(const FPresetData& Preset, int32 Order)
             return A.ToString() < B.ToString();
         });
 
+    TSet<FName> AddedSectionCategories;
     for (const FName CategoryId : SortedCategoryIds)
     {
-        if (!Preset.HiddenCategories.Contains(CategoryId))
+        if (Preset.HiddenCategories.Contains(CategoryId))
         {
-            Section->AddCategory(CategoryId);
+            continue;
+        }
+
+        const FName SectionCategoryId = PruneStatePrivate::GetSectionCategoryId(CategoryId);
+        if (!SectionCategoryId.IsNone() && !AddedSectionCategories.Contains(SectionCategoryId))
+        {
+            Section->AddCategory(SectionCategoryId);
+            AddedSectionCategories.Add(SectionCategoryId);
         }
     }
 }
@@ -1834,15 +1879,42 @@ void FPruneState::ApplyNativeOverrideForContext(
         FText::FromString(Override.DisplayName),
         Override.SectionOrder);
 
+    // A section can only include or exclude a top-level category. Aggregate any
+    // subcategory edits onto their root. If at least one child is included, the
+    // root must remain included; the root is removed only when every represented
+    // child requests removal.
+    TMap<FName, bool> DesiredRootMembership;
     for (const FName CategoryId : Context->GetCategoryIds())
     {
+        const FName SectionCategoryId = PruneStatePrivate::GetSectionCategoryId(CategoryId);
+        if (SectionCategoryId.IsNone())
+        {
+            continue;
+        }
+
         if (Override.AddedCategories.Contains(CategoryId))
         {
-            Section->AddCategory(CategoryId);
+            DesiredRootMembership.FindOrAdd(SectionCategoryId) = true;
         }
         else if (Override.RemovedCategories.Contains(CategoryId))
         {
-            Section->RemoveCategory(CategoryId);
+            bool& bDesiredIncluded = DesiredRootMembership.FindOrAdd(SectionCategoryId);
+            if (!bDesiredIncluded)
+            {
+                bDesiredIncluded = false;
+            }
+        }
+    }
+
+    for (const TPair<FName, bool>& Entry : DesiredRootMembership)
+    {
+        if (Entry.Value)
+        {
+            Section->AddCategory(Entry.Key);
+        }
+        else
+        {
+            Section->RemoveCategory(Entry.Key);
         }
     }
 
@@ -1901,6 +1973,7 @@ void FPruneState::RestoreNativeOverrideRuntime(FNativeOverrideData& Override)
             Override.SectionOrder);
 
         const FString Prefix = ClassName.ToString() + TEXT("|");
+        TMap<FName, bool> BaselineRootMembership;
         for (const TPair<FString, bool>& Entry : Override.BaselineMembership)
         {
             if (!Entry.Key.StartsWith(Prefix))
@@ -1909,14 +1982,26 @@ void FPruneState::RestoreNativeOverrideRuntime(FNativeOverrideData& Override)
             }
 
             const FString CategoryString = Entry.Key.RightChop(Prefix.Len());
-            const FName CategoryId(*CategoryString);
+            const FName SectionCategoryId =
+                PruneStatePrivate::GetSectionCategoryId(FName(*CategoryString));
+            if (SectionCategoryId.IsNone())
+            {
+                continue;
+            }
+
+            bool& bIncluded = BaselineRootMembership.FindOrAdd(SectionCategoryId);
+            bIncluded = bIncluded || Entry.Value;
+        }
+
+        for (const TPair<FName, bool>& Entry : BaselineRootMembership)
+        {
             if (Entry.Value)
             {
-                Section->AddCategory(CategoryId);
+                Section->AddCategory(Entry.Key);
             }
             else
             {
-                Section->RemoveCategory(CategoryId);
+                Section->RemoveCategory(Entry.Key);
             }
         }
     }
