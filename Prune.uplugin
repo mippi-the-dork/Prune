@@ -1,23 +1,28 @@
 {
-    "FileVersion": 3,
-    "Version": 26,
-    "VersionName": "1.0.0",
-    "FriendlyName": "Prune",
-    "Description": "Create, edit, organize, and share Actor Details category filters directly in Unreal Engine's native Details panel.",
-    "Category": "Editor",
-    "CreatedBy": "Mippi the Dork",
-    "CanContainContent": false,
-    "IsBetaVersion": false,
-    "Installed": false,
-    "EngineVersion": "5.8.0",
-    "SupportedTargetPlatforms": [
-        "Win64"
-    ],
-    "Modules": [
-        {
-            "Name": "Prune",
-            "Type": "Editor",
-            "LoadingPhase": "PostEngineInit"
-        }
-    ]
+	"FileVersion": 3,
+	"Version": 26,
+	"VersionName": "1.0.0",
+	"FriendlyName": "Prune",
+	"Description": "Create, edit, organize, and share Actor Details category filters directly in Unreal Engine's native Details panel.",
+	"Category": "Editor",
+	"CreatedBy": "Mippithedork",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"EngineVersion": "5.8.0",
+	"SupportedTargetPlatforms": [
+		"Win64"
+	],
+	"Modules": [
+		{
+			"Name": "Prune",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit"
+		}
+	],
+	"CreatedByURL": "https://github.com/mippi-the-dork",
+	"DocsURL": "https://github.com/mippi-the-dork/Prune",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/mippi-the-dork/Prune/issues",
+	"IsExperimentalVersion": false
 }
