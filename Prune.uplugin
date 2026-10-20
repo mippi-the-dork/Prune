@@ -4,7 +4,7 @@
 	"VersionName": "1.0.0",
 	"FriendlyName": "Prune",
 	"Description": "Create, edit, organize, and share Actor Details category filters directly in Unreal Engine's native Details panel.",
-	"Category": "Editor",
+	"Category": "Actor Details Panel",
 	"CreatedBy": "Mippithedork",
 	"CanContainContent": false,
 	"IsBetaVersion": false,
