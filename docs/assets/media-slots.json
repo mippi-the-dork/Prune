@@ -1,0 +1,87 @@
+{
+  "placeholder": "assets/media-placeholder.png",
+  "note": "Both Image and GIF slots currently show the same still placeholder PNG. Reader caption and visibly labeled capture instructions are present under every planned slot.",
+  "slots": [
+    {
+      "id": "prune-overview",
+      "kind": "image",
+      "page": "01-getting-started/overview/DESIGN.md",
+      "final_asset": "assets/media/prune-overview.png",
+      "alt": "Prune controls beside Unreal's native Actor Details filter row",
+      "caption": "Prune extends the existing Actor Details filter bar, keeping custom views alongside Unreal's normal filters.",
+      "capture_instructions": "Capture an Unreal Editor Details panel for a complex Actor with several native filters, two clearly named custom Prune filters, and all three Prune controls visible. Keep the Actor name and some expanded categories in frame."
+    },
+    {
+      "id": "prune-architecture-overview",
+      "kind": "image",
+      "page": "01-getting-started/overview/TECHNICAL.md",
+      "final_asset": "assets/media/prune-architecture-overview.png",
+      "alt": "Diagram of Prune's native Details panel extension points",
+      "caption": "Prune adds filter authoring and presentation controls around the native Details layout.",
+      "capture_instructions": "Create a labeled diagram showing the Unreal Property Editor, OnExtendActorDetails, FPruneModule, FPruneState and the native filter row. Show that Prune changes presentation rather than Actor data."
+    },
+    {
+      "id": "prune-install",
+      "kind": "image",
+      "page": "01-getting-started/installation/DESIGN.md",
+      "final_asset": "assets/media/prune-install.png",
+      "alt": "Prune plugin installed under an Unreal project's Plugins directory",
+      "caption": "A project-local installation keeps the plugin descriptor directly inside the Prune folder.",
+      "capture_instructions": "Capture Windows File Explorer at YourProject/Plugins/Prune, showing Prune.uplugin plus Source and Resources. Keep the address bar visible and avoid an extra nested Prune folder."
+    },
+    {
+      "id": "prune-first-filter",
+      "kind": "gif",
+      "page": "01-getting-started/first-use/DESIGN.md",
+      "final_asset": "assets/media/prune-first-filter.gif",
+      "alt": "Creating and activating a custom Prune filter",
+      "caption": "A named filter reduces a complex Actor's Details panel to the categories needed for the current task.",
+      "capture_instructions": "Record a 10–15 second Unreal Editor animation: select a complex Actor, click +, name the filter Gameplay, uncheck two categories, reorder one, Save, and click Gameplay to show the simplified Details panel. End briefly on All."
+    },
+    {
+      "id": "prune-create-dialog",
+      "kind": "image",
+      "page": "02-authoring-filters/create/DESIGN.md",
+      "final_asset": "assets/media/prune-create-dialog.png",
+      "alt": "Prune's New Filter window showing name, description and category choices",
+      "caption": "A custom filter combines its workflow name, scope and visible Details categories in one editor dialog.",
+      "capture_instructions": "Capture the New Filter dialog with Gameplay entered as the name, a realistic description, Class selected and several category checkboxes visible. Keep Save and Cancel in frame."
+    },
+    {
+      "id": "prune-categories",
+      "kind": "image",
+      "page": "02-authoring-filters/categories/DESIGN.md",
+      "final_asset": "assets/media/prune-categories.png",
+      "alt": "Category checkboxes and category search in the Prune filter editor",
+      "caption": "Prune lets each filter include the relevant Details categories while leaving unrelated property data intact.",
+      "capture_instructions": "Capture the filter editor with at least eight category names, several checked and unchecked rows, and a search query narrowing the visible choices. Keep a representative row's checkbox and category label readable."
+    },
+    {
+      "id": "prune-category-order",
+      "kind": "gif",
+      "page": "02-authoring-filters/ordering/DESIGN.md",
+      "final_asset": "assets/media/prune-category-order.gif",
+      "alt": "Reordering categories in Prune's filter editor",
+      "caption": "Each filter can present the same Actor categories in a different order that suits its workflow.",
+      "capture_instructions": "Record a GIF showing at least eight filter-editor categories, dragging Gameplay above Rendering, the blue insertion line, Save, and the resulting Details panel category order. Keep the dragged category visible throughout."
+    },
+    {
+      "id": "prune-scopes",
+      "kind": "image",
+      "page": "02-authoring-filters/scopes/DESIGN.md",
+      "final_asset": "assets/media/prune-scopes.png",
+      "alt": "Prune Class versus Global scope option",
+      "caption": "Class filters serve an Actor family; Global filters expose reusable views across Actor classes.",
+      "capture_instructions": "Capture the filter editor with Class/Global scope clearly visible and an Actor class label or tooltip. If possible include two side-by-side views showing the same Global filter available for different Actor types."
+    },
+    {
+      "id": "prune-edit-duplicate",
+      "kind": "gif",
+      "page": "02-authoring-filters/editing/DESIGN.md",
+      "final_asset": "assets/media/prune-edit-duplicate.gif",
+      "alt": "Editing and duplicating a Prune filter",
+      "caption": "Prune lets users adjust existing filters or create independent variants without changing Actor properties.",
+      "capture_instructions": "Record activating a single Gameplay filter, clicking Edit, changing one category, saving, then using Duplicate to create Gameplay Copy. Show both buttons in the native Details filter row at the end."
+    }
+  ]
+}
