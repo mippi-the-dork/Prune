@@ -100,7 +100,7 @@ Filter definitions, descriptions, scope, category order, Epic overrides, and per
 | | |
 | --- | --- |
 | **Prune** | v1.0.0 |
-| **Unreal Engine** | 5.8.0–5.8.3 |
+| **Unreal Engine** | 5.8 |
 | **Platform** | Windows 64-bit |
 | **Type** | Editor-only plugin |
 | **Engine modifications** | None |
