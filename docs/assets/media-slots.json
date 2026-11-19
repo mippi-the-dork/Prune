@@ -82,6 +82,96 @@
       "alt": "Editing and duplicating a Prune filter",
       "caption": "Prune lets users adjust existing filters or create independent variants without changing Actor properties.",
       "capture_instructions": "Record activating a single Gameplay filter, clicking Edit, changing one category, saving, then using Duplicate to create Gameplay Copy. Show both buttons in the native Details filter row at the end."
+    },
+    {
+      "id": "prune-epic-override",
+      "kind": "gif",
+      "page": "03-managing-filters/epic-filters/DESIGN.md",
+      "final_asset": "assets/media/prune-epic-override.gif",
+      "alt": "Editing and resetting an Epic Details filter",
+      "caption": "Prune can customize a built-in Epic filter and later return it to Unreal’s original definition.",
+      "capture_instructions": "Record selecting a native Rendering filter, opening Edit, hiding an unrelated category, saving, then using Reset to Epic Default. Show the category differences before and after reset."
+    },
+    {
+      "id": "prune-manager",
+      "kind": "image",
+      "page": "03-managing-filters/manager/DESIGN.md",
+      "final_asset": "assets/media/prune-manager.png",
+      "alt": "Prune Filter Manager showing different filter types and actions",
+      "caption": "The manager combines custom presets, Epic filters and overrides in a searchable list.",
+      "capture_instructions": "Capture Filter Manager populated with an Epic filter, Epic Override, Prune Class and Prune Global filter. Show descriptions, active selection, visible-category counts, and the New, Import, Export, Reset Button Order and Done controls."
+    },
+    {
+      "id": "prune-filter-bar",
+      "kind": "image",
+      "page": "03-managing-filters/filter-bar/DESIGN.md",
+      "final_asset": "assets/media/prune-filter-bar.png",
+      "alt": "Prune's native filter row with controls and contextual actions",
+      "caption": "Filter buttons remain native Unreal controls while Prune adds authoring shortcuts and context menus.",
+      "capture_instructions": "Capture a close-up of the Actor Details filter row showing All, at least two Epic filters, two Prune filters and +, Manager, Edit icons. Open one Prune filter's right-click menu with its available actions legible."
+    },
+    {
+      "id": "prune-button-order",
+      "kind": "gif",
+      "page": "03-managing-filters/filter-bar/DESIGN.md",
+      "final_asset": "assets/media/prune-button-order.gif",
+      "alt": "Reordering filter buttons from the Prune Filter Manager",
+      "caption": "The Filter Manager can move favorite filter buttons ahead of less-used native filters.",
+      "capture_instructions": "Record dragging a Gameplay filter row above General in Filter Manager, closing the manager, then showing the reordered native filter buttons. Include Reset Button Order if it fits within a short sequence."
+    },
+    {
+      "id": "prune-import-export",
+      "kind": "gif",
+      "page": "03-managing-filters/import-export/DESIGN.md",
+      "final_asset": "assets/media/prune-import-export.gif",
+      "alt": "Exporting and importing a Prune filter preset",
+      "caption": "Portable JSON exports let the same filter layout be reused in another project or Actor class.",
+      "capture_instructions": "Record exporting a Gameplay filter from Filter Manager, then selecting another Actor class and importing the saved .prunefilters.json file. Show the imported filter appearing with a safe copy name if a collision occurs."
+    },
+    {
+      "id": "prune-settings",
+      "kind": "image",
+      "page": "04-settings-and-implementation/preferences/DESIGN.md",
+      "final_asset": "assets/media/prune-settings.png",
+      "alt": "Prune plugin preferences in Unreal Project Settings",
+      "caption": "Appearance and default window sizes can be customized without changing any Actor properties.",
+      "capture_instructions": "Capture Project Settings → Plugins → Prune with Filter Editor Reordering, Filter Editor Window, Filter Bar, and Filter Manager Window groups expanded. Show default numeric values and the tooltip setting."
+    },
+    {
+      "id": "prune-state-ownership",
+      "kind": "image",
+      "page": "04-settings-and-implementation/persistence/DESIGN.md",
+      "final_asset": "assets/media/prune-state-ownership.png",
+      "alt": "Diagram of Prune config storage and Actor property data",
+      "caption": "Prune stores filter definitions in editor-user configuration, separately from the Actors being inspected.",
+      "capture_instructions": "Create a three-part diagram: Prune editor-user config containing presets/overrides/order, the native Details filter row reading that config, and Actor/Component properties remaining untouched. Include a `.prunefilters.json` export as a separate portable file."
+    },
+    {
+      "id": "prune-native-architecture",
+      "kind": "image",
+      "page": "04-settings-and-implementation/architecture/DESIGN.md",
+      "final_asset": "assets/media/prune-native-architecture.png",
+      "alt": "Diagram of Prune's source modules and Unreal Details integration",
+      "caption": "Prune’s module, state controller and Slate customization cooperate with Unreal’s native Property Editor.",
+      "capture_instructions": "Draw a technical diagram showing FPruneModule binding OnExtendActorDetails, FPruneDetailsCustomization building controls, FPruneState managing definitions, FPruneLayoutContext observing final category groups, and GEditorPerProjectIni storing filters."
+    },
+    {
+      "id": "prune-troubleshooting",
+      "kind": "image",
+      "page": "05-support/troubleshooting/DESIGN.md",
+      "final_asset": "assets/media/prune-troubleshooting.png",
+      "alt": "Comparing a filtered Details panel against All",
+      "caption": "Switching to All is a reliable first check when a property appears missing from an active Prune filter.",
+      "capture_instructions": "Capture the same Actor with a custom filter active in one view and All in another, showing that a hidden category becomes visible again. Include the active filter labels."
+    },
+    {
+      "id": "prune-update-location",
+      "kind": "image",
+      "page": "05-support/faq/DESIGN.md",
+      "final_asset": "assets/media/prune-update-location.png",
+      "alt": "Installed Prune plugin folder before replacing a release",
+      "caption": "Replacing the complete plugin folder avoids mixing source files and binaries from different releases.",
+      "capture_instructions": "Capture the Windows project Plugins/Prune folder with Prune.uplugin visible and the matching release ZIP shown nearby. Avoid showing personal usernames or proprietary project content."
     }
   ]
 }
