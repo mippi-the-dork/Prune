@@ -170,7 +170,7 @@
     const out=[];
     out.push('<a class="nav-home" data-page="'+esc(state.manifest.home)+'" href="'+pageUrl(state.manifest.home)+'">⌂ Documentation Home</a>');
     out.push('<a class="ref-link" data-page="ROADMAP.md" href="'+pageUrl('ROADMAP.md')+'">Roadmap · Future Direction</a>');
-    out.push('<div class="nav-label">CURRENT VERSION · '+esc((state.manifest.baseline||'v1.0.0').replace('Focus ','').toUpperCase())+'</div>');
+    out.push('<div class="nav-label">CURRENT VERSION · '+esc((state.manifest.baseline||'v1.0.0').replace('Prune ','').toUpperCase())+'</div>');
     
     
     
@@ -262,7 +262,7 @@
     });
 
     // Images in Markdown are resolved relative to the Markdown source file,
-    // rather than the site's query-driven /Focus/ page URL. External images
+    // rather than the site's query-driven /Prune/ page URL. External images
     // are left unchanged; this also keeps GitHub's Markdown preview correct.
     els.article.querySelectorAll('img[src]').forEach(img=>{
       const raw=img.getAttribute('src')||'';
@@ -404,7 +404,7 @@
           p.searchBody=stripSearchText(await r.text());
           p.searchBodyLower=p.searchBody.toLowerCase();
         }catch(error){
-          console.warn('Focus search could not index',p.path,error);
+          console.warn('Prune search could not index',p.path,error);
         }
       }
     }
@@ -520,7 +520,7 @@
       const r=await fetch('site-manifest.json',{cache:'no-cache'});
       if(!r.ok)throw new Error('Could not load documentation manifest.');
       state.manifest=await r.json();
-      const currentVersion=String(state.manifest.baseline||'Focus v1.0.0').match(/v\d+\.\d+(?:\.\d+)?/)?.[0]||'v1.0.0';
+      const currentVersion=String(state.manifest.baseline||'Prune v1.0.0').match(/v\d+\.\d+(?:\.\d+)?/)?.[0]||'v1.0.0';
       if(els.version) els.version.textContent=currentVersion+' DOCUMENTED';
       await loadStructure();
       buildPages();
