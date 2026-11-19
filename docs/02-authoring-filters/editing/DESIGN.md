@@ -4,7 +4,7 @@
 
 <!-- Media target: GIF | prune-edit-duplicate | docs/assets/media/prune-edit-duplicate.gif -->
 <figure class="doc-media" data-kind="gif" data-media-id="prune-edit-duplicate">
-  <img src="../../../assets/media-placeholder.png" alt="Editing and duplicating a Prune filter" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Editing and duplicating a Prune filter" loading="lazy">
   <figcaption>Prune lets users adjust existing filters or create independent variants without changing Actor properties.<span class="media-capture-instructions"><strong>Capture instructions · GIF:</strong> Record activating a single Gameplay filter, clicking Edit, changing one category, saving, then using Duplicate to create Gameplay Copy. Show both buttons in the native Details filter row at the end.</span></figcaption>
 </figure>
 

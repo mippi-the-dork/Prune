@@ -4,7 +4,7 @@
 
 <!-- Media target: IMAGE | prune-categories | docs/assets/media/prune-categories.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-categories">
-  <img src="../../../assets/media-placeholder.png" alt="Category checkboxes and category search in the Prune filter editor" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Category checkboxes and category search in the Prune filter editor" loading="lazy">
   <figcaption>Prune lets each filter include the relevant Details categories while leaving unrelated property data intact.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Capture the filter editor with at least eight category names, several checked and unchecked rows, and a search query narrowing the visible choices. Keep a representative row's checkbox and category label readable.</span></figcaption>
 </figure>
 

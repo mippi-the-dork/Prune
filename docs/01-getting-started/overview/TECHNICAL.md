@@ -4,7 +4,7 @@
 
 <!-- Media target: IMAGE | prune-architecture-overview | docs/assets/media/prune-architecture-overview.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-architecture-overview">
-  <img src="../../../assets/media-placeholder.png" alt="Diagram of Prune's native Details panel extension points" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Diagram of Prune's native Details panel extension points" loading="lazy">
   <figcaption>Prune adds filter authoring and presentation controls around the native Details layout.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Create a labeled diagram showing the Unreal Property Editor, OnExtendActorDetails, FPruneModule, FPruneState and the native filter row. Show that Prune changes presentation rather than Actor data.</span></figcaption>
 </figure>
 

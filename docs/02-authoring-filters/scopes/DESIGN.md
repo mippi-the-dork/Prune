@@ -4,7 +4,7 @@
 
 <!-- Media target: IMAGE | prune-scopes | docs/assets/media/prune-scopes.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-scopes">
-  <img src="../../../assets/media-placeholder.png" alt="Prune Class versus Global scope option" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Prune Class versus Global scope option" loading="lazy">
   <figcaption>Class filters serve an Actor family; Global filters expose reusable views across Actor classes.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Capture the filter editor with Class/Global scope clearly visible and an Actor class label or tooltip. If possible include two side-by-side views showing the same Global filter available for different Actor types.</span></figcaption>
 </figure>
 

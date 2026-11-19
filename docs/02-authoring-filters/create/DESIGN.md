@@ -4,7 +4,7 @@
 
 <!-- Media target: IMAGE | prune-create-dialog | docs/assets/media/prune-create-dialog.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-create-dialog">
-  <img src="../../../assets/media-placeholder.png" alt="Prune's New Filter window showing name, description and category choices" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Prune's New Filter window showing name, description and category choices" loading="lazy">
   <figcaption>A custom filter combines its workflow name, scope and visible Details categories in one editor dialog.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Capture the New Filter dialog with Gameplay entered as the name, a realistic description, Class selected and several category checkboxes visible. Keep Save and Cancel in frame.</span></figcaption>
 </figure>
 

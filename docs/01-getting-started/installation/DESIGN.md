@@ -4,7 +4,7 @@
 
 <!-- Media target: IMAGE | prune-install | docs/assets/media/prune-install.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-install">
-  <img src="../../../assets/media-placeholder.png" alt="Prune plugin installed under an Unreal project's Plugins directory" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Prune plugin installed under an Unreal project's Plugins directory" loading="lazy">
   <figcaption>A project-local installation keeps the plugin descriptor directly inside the Prune folder.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Capture Windows File Explorer at YourProject/Plugins/Prune, showing Prune.uplugin plus Source and Resources. Keep the address bar visible and avoid an extra nested Prune folder.</span></figcaption>
 </figure>
 

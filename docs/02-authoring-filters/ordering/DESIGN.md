@@ -4,7 +4,7 @@
 
 <!-- Media target: GIF | prune-category-order | docs/assets/media/prune-category-order.gif -->
 <figure class="doc-media" data-kind="gif" data-media-id="prune-category-order">
-  <img src="../../../assets/media-placeholder.png" alt="Reordering categories in Prune's filter editor" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Reordering categories in Prune's filter editor" loading="lazy">
   <figcaption>Each filter can present the same Actor categories in a different order that suits its workflow.<span class="media-capture-instructions"><strong>Capture instructions · GIF:</strong> Record a GIF showing at least eight filter-editor categories, dragging Gameplay above Rendering, the blue insertion line, Save, and the resulting Details panel category order. Keep the dragged category visible throughout.</span></figcaption>
 </figure>
 

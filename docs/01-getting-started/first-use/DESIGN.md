@@ -4,7 +4,7 @@
 
 <!-- Media target: GIF | prune-first-filter | docs/assets/media/prune-first-filter.gif -->
 <figure class="doc-media" data-kind="gif" data-media-id="prune-first-filter">
-  <img src="../../../assets/media-placeholder.png" alt="Creating and activating a custom Prune filter" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Creating and activating a custom Prune filter" loading="lazy">
   <figcaption>A named filter reduces a complex Actor's Details panel to the categories needed for the current task.<span class="media-capture-instructions"><strong>Capture instructions · GIF:</strong> Record a 10–15 second Unreal Editor animation: select a complex Actor, click +, name the filter Gameplay, uncheck two categories, reorder one, Save, and click Gameplay to show the simplified Details panel. End briefly on All.</span></figcaption>
 </figure>
 

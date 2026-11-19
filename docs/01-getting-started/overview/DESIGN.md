@@ -4,7 +4,7 @@
 
 <!-- Media target: IMAGE | prune-overview | docs/assets/media/prune-overview.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-overview">
-  <img src="../../../assets/media-placeholder.png" alt="Prune controls beside Unreal's native Actor Details filter row" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Prune controls beside Unreal's native Actor Details filter row" loading="lazy">
   <figcaption>Prune extends the existing Actor Details filter bar, keeping custom views alongside Unreal's normal filters.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Capture an Unreal Editor Details panel for a complex Actor with several native filters, two clearly named custom Prune filters, and all three Prune controls visible. Keep the Actor name and some expanded categories in frame.</span></figcaption>
 </figure>
 
