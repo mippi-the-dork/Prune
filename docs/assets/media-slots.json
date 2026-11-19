@@ -172,6 +172,60 @@
       "alt": "Installed Prune plugin folder before replacing a release",
       "caption": "Replacing the complete plugin folder avoids mixing source files and binaries from different releases.",
       "capture_instructions": "Capture the Windows project Plugins/Prune folder with Prune.uplugin visible and the matching release ZIP shown nearby. Avoid showing personal usernames or proprietary project content."
+    },
+    {
+      "id": "prune-section-start",
+      "kind": "image",
+      "page": "01-getting-started/README.md",
+      "final_asset": "assets/media/prune-section-start.png",
+      "alt": "Prune filter controls within an Unreal Actor Details panel",
+      "caption": "The standard Details filter row gains Prune's authoring controls without changing native property editing.",
+      "capture_instructions": "Capture the Details panel of a complex Actor with several existing Epic filters, two Prune filters, and the New, Manager and Edit controls in the same frame."
+    },
+    {
+      "id": "prune-section-author",
+      "kind": "gif",
+      "page": "02-authoring-filters/README.md",
+      "final_asset": "assets/media/prune-section-author.gif",
+      "alt": "Creating a filter and choosing relevant Details categories",
+      "caption": "A custom Prune filter makes frequently used categories easier to find without hiding their underlying property data permanently.",
+      "capture_instructions": "Record clicking New Filter, entering a name, checking useful categories, dragging one category into a new position and saving the finished filter. Show the resulting filtered Details layout."
+    },
+    {
+      "id": "prune-section-manager",
+      "kind": "image",
+      "page": "03-managing-filters/README.md",
+      "final_asset": "assets/media/prune-section-manager.png",
+      "alt": "Filter Manager with built-in, overridden and custom filters",
+      "caption": "The manager distinguishes filter ownership, scope and category coverage while providing editing and sharing actions.",
+      "capture_instructions": "Capture the full Filter Manager showing Epic, Epic Override, Class and Global entries, an active filter, and the import/export and reset controls."
+    },
+    {
+      "id": "prune-section-settings",
+      "kind": "image",
+      "page": "04-settings-and-implementation/README.md",
+      "final_asset": "assets/media/prune-section-settings.png",
+      "alt": "Prune Project Settings and persisted filter state diagram",
+      "caption": "Prune's display preferences and per-user filter definitions are separate from Actor property data.",
+      "capture_instructions": "Make a labeled two-column diagram showing Project Settings preferences and EditorPerProjectUserSettings filter data, with a separate Actor properties block explicitly unchanged by Prune."
+    },
+    {
+      "id": "prune-section-troubleshoot",
+      "kind": "image",
+      "page": "05-support/README.md",
+      "final_asset": "assets/media/prune-section-troubleshoot.png",
+      "alt": "Comparing an active Prune filter to the All view",
+      "caption": "All provides a quick way to verify that a category hidden by a filter still exists in Unreal's Details panel.",
+      "capture_instructions": "Capture two views of the same Actor, with a custom filter active on one and All active on the other. Highlight the categories present only in the All view."
+    },
+    {
+      "id": "prune-roadmap",
+      "kind": "image",
+      "page": "ROADMAP.md",
+      "final_asset": "assets/media/prune-roadmap.png",
+      "alt": "Prune released baseline and possible future directions",
+      "caption": "The roadmap distinguishes Prune's available v1.0 filter-authoring capabilities from unscheduled improvements.",
+      "capture_instructions": "Create a clean diagram with v1.0.0 marked Released and the core filter features grouped beneath it, followed by a clearly separate Future / Under Evaluation area without an invented version number."
     }
   ]
 }
