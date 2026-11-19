@@ -4,13 +4,13 @@
 
 <!-- Media target: IMAGE | prune-filter-bar | docs/assets/media/prune-filter-bar.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-filter-bar">
-  <img src="../../../assets/media-placeholder.png" alt="Prune's native filter row with controls and contextual actions" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Prune's native filter row with controls and contextual actions" loading="lazy">
   <figcaption>Filter buttons remain native Unreal controls while Prune adds authoring shortcuts and context menus.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Capture a close-up of the Actor Details filter row showing All, at least two Epic filters, two Prune filters and +, Manager, Edit icons. Open one Prune filter's right-click menu with its available actions legible.</span></figcaption>
 </figure>
 
 <!-- Media target: GIF | prune-button-order | docs/assets/media/prune-button-order.gif -->
 <figure class="doc-media" data-kind="gif" data-media-id="prune-button-order">
-  <img src="../../../assets/media-placeholder.png" alt="Reordering filter buttons from the Prune Filter Manager" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Reordering filter buttons from the Prune Filter Manager" loading="lazy">
   <figcaption>The Filter Manager can move favorite filter buttons ahead of less-used native filters.<span class="media-capture-instructions"><strong>Capture instructions · GIF:</strong> Record dragging a Gameplay filter row above General in Filter Manager, closing the manager, then showing the reordered native filter buttons. Include Reset Button Order if it fits within a short sequence.</span></figcaption>
 </figure>
 

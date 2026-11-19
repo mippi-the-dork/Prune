@@ -4,7 +4,7 @@
 
 <!-- Media target: IMAGE | prune-manager | docs/assets/media/prune-manager.png -->
 <figure class="doc-media" data-kind="image" data-media-id="prune-manager">
-  <img src="../../../assets/media-placeholder.png" alt="Prune Filter Manager showing different filter types and actions" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Prune Filter Manager showing different filter types and actions" loading="lazy">
   <figcaption>The manager combines custom presets, Epic filters and overrides in a searchable list.<span class="media-capture-instructions"><strong>Capture instructions · Image:</strong> Capture Filter Manager populated with an Epic filter, Epic Override, Prune Class and Prune Global filter. Show descriptions, active selection, visible-category counts, and the New, Import, Export, Reset Button Order and Done controls.</span></figcaption>
 </figure>
 

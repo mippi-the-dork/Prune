@@ -4,7 +4,7 @@
 
 <!-- Media target: GIF | prune-import-export | docs/assets/media/prune-import-export.gif -->
 <figure class="doc-media" data-kind="gif" data-media-id="prune-import-export">
-  <img src="../../../assets/media-placeholder.png" alt="Exporting and importing a Prune filter preset" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Exporting and importing a Prune filter preset" loading="lazy">
   <figcaption>Portable JSON exports let the same filter layout be reused in another project or Actor class.<span class="media-capture-instructions"><strong>Capture instructions · GIF:</strong> Record exporting a Gameplay filter from Filter Manager, then selecting another Actor class and importing the saved .prunefilters.json file. Show the imported filter appearing with a safe copy name if a collision occurs.</span></figcaption>
 </figure>
 

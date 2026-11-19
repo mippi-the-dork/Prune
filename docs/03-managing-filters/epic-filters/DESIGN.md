@@ -4,7 +4,7 @@
 
 <!-- Media target: GIF | prune-epic-override | docs/assets/media/prune-epic-override.gif -->
 <figure class="doc-media" data-kind="gif" data-media-id="prune-epic-override">
-  <img src="../../../assets/media-placeholder.png" alt="Editing and resetting an Epic Details filter" loading="lazy">
+  <img src="../../assets/media-placeholder.png" alt="Editing and resetting an Epic Details filter" loading="lazy">
   <figcaption>Prune can customize a built-in Epic filter and later return it to Unreal’s original definition.<span class="media-capture-instructions"><strong>Capture instructions · GIF:</strong> Record selecting a native Rendering filter, opening Edit, hiding an unrelated category, saving, then using Reset to Epic Default. Show the category differences before and after reset.</span></figcaption>
 </figure>
 
